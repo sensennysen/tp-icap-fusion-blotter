@@ -35,3 +35,14 @@
 - `@tanstack/react-table@9` replaced `useReactTable`/`getCoreRowModel()` with `useTable` +
   `tableFeatures(...)`. The package ships its own `skills/` docs under `node_modules` — read
   those before guessing from v8-era memory.
+
+## Found by `/dev-tasks-planner` (2026-09-23)
+
+4. **ADR-001 was never corrected after the pnpm decision above.** It still literally reads "npm
+   workspaces only... no Nx/Turborepo" while the repo actually ships `pnpm-workspace.yaml`,
+   `packageManager: pnpm@12.5.1`, and a CI pipeline using `pnpm/action-setup`. The reasoning for
+   choosing pnpm is captured in this file's own notes (`resolve_package_versions` bug), but the
+   ADR text itself was left stale. Any future `/dev-tasks-planner` or doc-consuming step should
+   treat ADR-001's "npm workspaces" line as known-wrong, not as ground truth — the actual
+   convention is pnpm. Worth a follow-up: correct ADR-001's Decision section to say "pnpm
+   workspaces" so it matches reality.
