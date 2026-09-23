@@ -83,3 +83,28 @@
     Fixed the parallel-race half (`fileParallelism: false` in `backend/vitest.config.ts`).
     Follow-up (BACKLOG): point tests at a separate `trades_test` database (e.g. a `DATABASE_URL`
     override in `test/setup.ts` or a `TEST_DATABASE_URL`) so tests never touch dev data.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-004 (2026-09-23)
+
+13. **`TradeRepository` had no direct tests.** `tradeService.test.ts` mocks it and
+    `routes/trades.test.ts` only covers filter-by-symbol, one cancel and 404s. Added
+    `backend/test/repositories/tradeRepository.test.ts` (real Postgres, repository called directly):
+    all 4 filters, all 5 sort fields x asc/desc, the `tradeTimestamp desc` default, row mapping
+    (Decimal -> number, ISO strings), and create/update/cancel/findById/nextTradeId. It only creates
+    and deletes `TEST-REPO-*` rows and narrows `list()` results to that prefix, so it is safe on the
+    seeded dev DB. Mutation-checked: dropping the trader filter, flipping the default order,
+    removing `Number(price)` and making `cancel` a no-op each fail tests. **Survived:** changing the
+    `nextTradeId` base (`100001` -> `100002`) — tests assert "+1 after create", not the absolute
+    value, because dev data makes the count unknowable.
+14. **`nextTradeId()` is `count()`-based and not concurrency-safe.** Two concurrent creates can be
+    issued the same `TRD-` code; the `tradeId` unique constraint then turns the loser into a 500.
+    Deleting rows can also re-issue an existing code. Recorded as `it.todo`. Follow-up (BACKLOG):
+    Postgres sequence (needs a migration) or retry on P2002.
+15. **CSV wording drift.** TASK-004 says "sequential TRD-1000xx codes"; the code emits
+    `TRD-100001` and up (six digits, rolling to `TRD-100100` etc.). Follow-up (BACKLOG): fix the CSV.
+16. **`update`/`cancel` throw raw Prisma `P2025` on an unknown id.** The repository does no
+    translation; the 404 depends entirely on `TradeService` calling `findById` first. Pinned in the
+    new tests so a change is deliberate.
+17. **`pnpm typecheck` does not cover `backend/test/`.** `backend/tsconfig.json` has
+    `include: ["src"]`, so type errors in tests are only caught by vitest's transpile-only run and
+    ESLint. Follow-up (BACKLOG): add a `tsconfig.test.json` or widen `include`.
