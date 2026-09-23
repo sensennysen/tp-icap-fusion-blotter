@@ -213,3 +213,40 @@
 36. **Mutation harness note.** `git checkout -- <file>` between mutants would have discarded the
     uncommitted fix, so the run restored from a copy of the file instead. Worth remembering whenever
     the file under test has unstaged changes.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-008 (2026-09-24)
+
+37. **`routes/trades.test.ts` wiped the whole `trades` table on every run.** Its `beforeEach` ran an
+    unfiltered `prisma.trade.deleteMany()`, so `pnpm test` emptied the seeded dev DB (it was at 0 rows
+    when this task started). `POST /trades` generates `tradeId` itself, so the `TEST-` prefix from
+    `db-backed-tests.md` cannot be applied through the API. Fixed by tracking the `id` of every row the
+    file creates and deleting only those in `afterEach`, using distinctive symbols (`ZZROUTE`,
+    `ZZOTHER`) to narrow list/filter/sort assertions. The dev DB is not re-seeded by this task.
+38. **The CSV's "8 route tests" was 7.** The file now has 14 real-Postgres tests, adding `GET /:id`
+    success, `PATCH` success and validation, 404 on `PATCH`/cancel of a missing id, `sort`/`order`, and
+    an invalid list query. The CSV row is left as written.
+39. **App wiring had no direct tests.** New `backend/test/app.test.ts` (13 tests + 1 `it.todo`, stubbed
+    service, no DB) covers CORS, helmet, the 100kb body limit, pino request logging, middleware order
+    and per-route delegation. CORS is asserted against `env.CORS_ORIGIN`, not a hardcoded URL. Note
+    `cors({ origin: <string> })` answers with the configured origin regardless of the caller's `Origin`;
+    it does not reflect or block, so "restricted" means the browser refuses a mismatch, not the server.
+40. **pino-http logs on a per-request child logger**, so `vi.spyOn(logger, 'info')` never sees
+    "request completed". Spy on `logger.child` instead, replace the returned child's `info` with a
+    recorder (`requestLogger` captures `logger` at import, but `child` is looked up per request). Do
+    not pass through to the real `info`: pino then dumps the raw req/res objects into the test output.
+    Also asserts `console.log` was not called.
+41. **Oversized bodies still return 500** (retro #28). Now pinned by a characterization test in
+    `app.test.ts`; flip it to 413 once a spec decision is made.
+42. **Unknown `/api/*` paths return Express's default HTML 404**, not the JSON envelope. Recorded as an
+    `it.todo`. Follow-up (BACKLOG): add a catch-all envelope 404, or decide it is out of scope.
+43. **`nextTradeId()` is `count + 100001`**, so ids collide with the `@unique` `tradeId` if a row other
+    than the newest is deleted, or under concurrent creates. Safe for this file (serial, only deletes its
+    own newest rows), but a latent bug for real use. Follow-up (BACKLOG): a DB sequence, or retry on P2002.
+44. **Mutation-checked, 16 mutants, 16 killed** (helmet, CORS origin, both limit directions, request
+    logger, `errorHandler` removed and mounted first, 201 to 200, each `parse` dropped, wrong schema on
+    PATCH, wrong id passed to each service call, error swallowed). The first pass leaked 8 rows: a mutant
+    broke the 201 assertion in `createTrade()` before the id was tracked. Fixed by tracking the id before
+    asserting.
+45. **Retro #17 confirmed again.** Both files typecheck clean under a temporary tsconfig
+    (`include: ["src", "test/app.test.ts", "test/routes"]`), but `pnpm typecheck` still skips
+    `backend/test/`. The temp tsconfig must live in `backend/` (a scratchpad copy cannot resolve `types`).
