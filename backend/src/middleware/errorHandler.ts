@@ -20,6 +20,19 @@ export function errorHandler(
     return;
   }
 
+  // express.json() rejects unparseable bodies before any route runs.
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'type' in err &&
+    err.type === 'entity.parse.failed'
+  ) {
+    res.status(400).json({
+      error: { code: 'VALIDATION_ERROR', message: 'Malformed JSON in request body' },
+    });
+    return;
+  }
+
   if (err instanceof AppError) {
     res.status(err.statusCode).json({
       error: {
