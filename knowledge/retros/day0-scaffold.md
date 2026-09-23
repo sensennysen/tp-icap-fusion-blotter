@@ -46,3 +46,21 @@
    treat ADR-001's "npm workspaces" line as known-wrong, not as ground truth — the actual
    convention is pnpm. Worth a follow-up: correct ADR-001's Decision section to say "pnpm
    workspaces" so it matches reality.
+
+## Found by `/evaluate` + `/validate` on TASK-002 (2026-09-23)
+
+5. **Test counts were inflated by stale `dist/`.** `shared`'s build (`tsc --outDir dist`, `include: ["src"]`)
+   also compiles `schemas.test.ts` into git-ignored `shared/dist/`, and vitest with no config ran both
+   copies (8 real tests reported as 16). Fixed with `shared/vitest.config.ts` (`include: src/**/*.test.ts`).
+   Follow-up (BACKLOG): exclude `*.test.ts` from the build tsconfig so tests aren't emitted at all;
+   check `backend/` and `frontend/` for the same pattern before trusting their CSV test counts.
+6. **`PATCH /trades/:id` accepts an empty `{}` body.** `amendTradeSchema = createTradeSchema.partial()`
+   accepts `{}`, so an empty amend is a successful no-op that still broadcasts a real-time event.
+   Pinned by an explicit test in `shared/src/schemas.test.ts`. Follow-up (BACKLOG): decide whether to
+   reject it (e.g. `.refine` requiring at least one key) — touches `routes/trades.ts` tests and
+   `AmendTradeModal`.
+7. **TASK-002 ID collision across CSVs.** `core-tasks.csv` (shared schemas) and `bonus-tasks.csv`
+   (mock auth) both use TASK-002, so `/evaluate TASK-002` is ambiguous without the epic. Follow-up
+   (BACKLOG): renumber bonus tasks or prefix IDs by CSV.
+8. **CSV files use CRLF line endings.** Scripted edits must read/write in binary or `newline=''`
+   — Python text mode silently rewrites every line (a 1-row change showed as 22 rows in git).
