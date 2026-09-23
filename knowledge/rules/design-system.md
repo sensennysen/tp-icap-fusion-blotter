@@ -30,6 +30,11 @@ Tailwind auto-generates utilities from these (`bg-buy`, `text-sell`, `bg-toast-e
   side-color badges legible while visually deprioritizing the row.
 - Row actions (Amend/Cancel) are hidden entirely once a trade is `CANCELLED`, rather than disabled,
   since there is nothing a cancelled trade can still be amended into.
+- Sorting is one column at a time with two states: a header click toggles asc/desc and never
+  clears the sort, and shift-click replaces rather than adds. The sorted `<th>` carries
+  `aria-sort`, and its ▲/▼ glyph is `aria-hidden`. Headers that can't sort (Actions) are plain
+  text. Default: Timestamp, newest first.
+- Prices show 2–4 decimal places (`$189.50`, `$10.1234`), matching the stored `Decimal(12,4)`.
 
 ## Icons
 

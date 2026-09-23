@@ -471,3 +471,93 @@ src/server.ts"` does not match the tsx process (its argv is `… loader.mjs src/
     `TradeBlotterPage`'s `onSubmit` catches the error to show the toast, so `CreateTradeModal`
     always reaches `onClose()`. Rethrowing after the toast, or returning a success flag, would
     keep the form open. Belongs to TASK-015/016/018.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-014 (2026-09-24)
+
+95. **The first click on the default-sorted Timestamp header cleared the sort.** In TanStack v9
+    the first direction is chosen from the sampled value's type. ISO timestamps are strings, so
+    it was ascending. The grid starts at desc, which is not the first direction, so with
+    `enableSortingRemoval` (default `true`) the next click removed the sort. Rows fell back to
+    API order, which is also timestamp desc, so the ▼ disappeared and nothing moved. Found with a
+    throwaway RTL probe against the real component. The grid now sets
+    `enableSortingRemoval: false`, and Timestamp has `sortDescFirst: true`, so coming back to it
+    from another column also starts newest first.
+96. **Every column cycled through three states, and shift-click stacked sorts.** Text columns
+    went asc → desc → unsorted and number columns desc → asc → unsorted. Shift-click added a
+    second sort key with no priority shown. The AC says headers toggle asc/desc, and the API's
+    `TradeListQuery` has a single `sort`/`order`, so the grid now sets `enableMultiSort: false`.
+    Sorting is one column with two states.
+97. **Sort state was not exposed to assistive tech.** There was no `aria-sort`, the ▲/▼ glyph was
+    part of the button's name ("Timestamp ▼"), and the Actions header was a disabled `<button>`.
+    Now the sorted `<th>` gets `aria-sort` (only one header at a time, as ARIA asks, which the
+    single-column sort makes possible), the glyph is `aria-hidden`, and headers that can't sort
+    render as plain text.
+98. **Prices were cut to 2dp.** The DB stores `Decimal(12,4)`, but the formatter used the USD
+    default of 2 fraction digits, so an amend from 10.1234 to 10.1249 showed $10.12 both times and
+    looked like a no-op. It now shows 2–4 digits: $189.50, $10.1234. This goes beyond the ACs; it
+    was flagged as optional in the plan.
+99. **New tests:** `frontend/test/TradeGrid.test.tsx` went from 4 to 35. Covered: states, the 10
+    columns + Actions in order, every cell, price formatting, badge and dimming classes, action
+    visibility and callbacks (including after a re-sort and with new callbacks), the default
+    sort, the Timestamp toggle, all 9 other columns via `it.each`, returning to Timestamp,
+    shift-click, the Actions header, the hidden arrow, and live data (prepended arrivals sorted,
+    the user's sort kept, focus kept, a trade arriving cancelled). 20 of the 35 fail against the
+    old component. Pattern in `knowledge/patterns/trade-grid-tests.md`.
+100.  **Mutation-checked: 24 mutants, 23 killed.** `getRowId` first survived because the
+      live-data tests appended. TanStack's default row id is the input index, so appending
+      changes no ids. `reconcile` prepends, which shifts every index, so the tests now prepend,
+      and a focus test kills it. The survivor, `sortFn: 'datetime'`, is equivalent: the auto
+      `alphanumeric` sort orders `toISOString` strings the same way.
+101.  **Still open, out of scope for TASK-014:**
+      - Quantity has no thousands separator (1000, not 1,000).
+      - ARCH §11 says "grid rows color-coded by side". The CSV and the grid use a side badge
+        instead, and design-system.md documents the badge. Accepted as is.
+      - graphify has no `TradeBlotterPage.tsx` → `TradeGrid.tsx` import edge. `graphify path`
+        only connects them through `react` (the same gap as #80). Use grep for blast radius.
+      - Bonus TASK-003 (virtualization) names this suite as its regression check. The queries
+        are role-based and row-order based, but how a virtualizer renders under jsdom (no
+        layout) was not checked.
+
+## Found by `/validate` on TASK-014 (2026-09-24)
+
+102.  **`/validate`: checked in the real app with headless Chrome (CDP), no DB writes.** Same
+      setup as #92: a local backend, plus Vite started with `VITE_API_BASE_URL` / `VITE_WS_URL`
+      set on the command line (#93 is still open), against the 500-row dev database. Results:
+      - All 10 columns plus Actions render in order.
+      - Every column, clicked 3 times, stays sorted over all 500 rows (checked against the API
+        data) and never becomes unsorted. Returning to Timestamp starts newest first.
+      - Shift-click leaves only the new column sorted, and Actions has no button.
+      - The 46 cancelled rows compute `opacity: 0.5` with no buttons. The 454 active rows compute
+        `1` with both buttons.
+      - The BUY and SELL badges compute different colours.
+      - All 500 price cells match the 2–4dp format.
+      - Chrome's accessibility tree names the header buttons "Timestamp" / "Symbol", without the
+        arrow.
+
+      Gotchas:
+      - `Accessibility.getFullAXTree` on this page never resolved. Use
+        `Accessibility.getPartialAXTree` for each `thead th` node instead.
+      - The partial tree reported no sort property for the sorted header, so `aria-sort` was
+        checked on the DOM.
+      - The only console messages were pre-existing: a `favicon.ico` 404, and a WebSocket
+        "closed before the connection is established" warning from the StrictMode double mount
+        in dev.
+
+103.  **`/validate` graph check: no unplanned boundary crossings.** `TradeGrid.tsx` still imports
+      only `react`, `@tanstack/react-table` and the shared `Trade`. The test's new helpers
+      (`expectSortedBy`, `columnValues`, …) form their own `TradeGrid.test.tsx` community. The
+      test's import resolves to a phantom `ref_src_components_tradegrid_js` node, and graphify
+      re-clusters `TradeGrid()` into `useRealtimeTrades`. Both are artifacts like #82.
+104.  **BACKLOG: the 2–4dp price format leaves the Price column with mixed decimal places.**
+      `Intl` drops trailing zeros, so the seeded prices show as 444 × 4dp, 52 × 3dp
+      (`$114.236`) and 4 × 2dp. The plan chose 2–4dp (`$189.50`) and was approved that way.
+      Before this task every price had 2dp. `minimumFractionDigits: 4` would give one precision
+      for every row (`$189.5000`). That changes an approved decision, so it is left for the owner.
+105.  **BACKLOG: grid cells wrap mid-token at 1440px.** Trade ID (`TRD-` / `100450`), Book and
+      Timestamp wrap on every row. The wrapping is pre-existing: it measured the same with the
+      old 2dp price text swapped into the same page. `whitespace-nowrap` on the cells would fix
+      it; the container already has `overflow-x-auto`. This hurts the user story's "scan the
+      grid quickly", but no AC covers it.
+106.  **BACKLOG: the seed gives only 30 distinct timestamps for 500 trades** (one per day). The
+      default sort therefore has runs of about 17 tied rows, which keep the API's order within
+      a day (Postgres picks it). The fix belongs to the seed (TASK-009), not the grid.
