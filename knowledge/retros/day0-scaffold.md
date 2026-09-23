@@ -172,3 +172,44 @@
 26. **Retro #17 confirmed, and worked around.** The new test file typechecks clean under a temporary
     tsconfig that includes it (`backend/tsconfig.json` still has `include: ["src"]`), so the file is
     type-correct today, but `pnpm typecheck` would not have caught a regression.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-007 (2026-09-24)
+
+27. **The error layer had no direct tests, and one real bug.** The CSV is `Done` and `errors.ts`
+    plus `errorHandler.ts` were wired correctly, but only 3 DB-backed route tests touched them.
+    Malformed JSON bodies (`express.json()` raises `entity.parse.failed`) fell through to the
+    "unhandled" branch: a 500 `INTERNAL_ERROR` and an error-level log for what is a client mistake.
+    Fixed with one branch in `errorHandler.ts` returning 400 `VALIDATION_ERROR` with a generic
+    message that does not echo the body. No new error code, so ARCH §8 is unchanged.
+    `backend/test/middleware/errorHandler.test.ts` is 21 tests + 1 `it.todo`, no DB.
+28. **Oversized bodies (>100kb) still return 500.** body-parser raises `PayloadTooLargeError`
+    (`status` 413), which also lands in the unhandled branch. Not fixed: ARCH §8 lists only
+    400/404/409/500, so a 413 (`PAYLOAD_TOO_LARGE`) needs a spec decision. Follow-up (BACKLOG):
+    decide, then map it and test it.
+29. **Same-path Zod issues collapse to the last message.** `fields[path] = issue.message` overwrites,
+    so a field failing `.min()` and `.regex()` reports only the second. Pinned as a characterization
+    test, not endorsed. Follow-up (BACKLOG): keep the first message, or join them.
+30. **`errorHandler` has no `res.headersSent` guard.** If a route errors after starting a response,
+    the handler's `res.status().json()` throws `ERR_HTTP_HEADERS_SENT`. No current route streams, so
+    it is latent. Recorded as an `it.todo`. Fix location: `if (res.headersSent) return next(err)` at
+    the top of `errorHandler.ts`.
+31. **`AppError.name` is never set**, so it logs and stringifies as plain `Error`. Cosmetic today
+    (the handler dispatches on `instanceof`), but it makes pino output harder to scan. Follow-up
+    (BACKLOG): set `this.name = new.target.name`.
+32. **`throw null` cannot reach the handler.** Express treats a falsy `next(err)` as "no error", so it
+    falls through to the default 404. Only truthy non-Error values (strings, objects) are testable and
+    are covered. A lookalike `{statusCode: 404}` object is a 500, since dispatch is `instanceof`.
+33. **The frontend depends on the envelope.** `frontend/src/lib/apiClient.ts:30` reads
+    `body.error.code` unconditionally, so a non-envelope error body would break `ApiError`
+    construction. The malformed-JSON fix closes the one route-reachable case found; the 413 case (#28)
+    still returns a body the client can parse, because the handler's 500 is an envelope.
+34. **Mutation-checked, 22 mutants, 21 killed.** Covered: each branch removed, each status, code and
+    message changed, the `fields` spread dropped, `_` and `.` path keys, first-wins vs last-wins, the
+    log call removed or its args dropped, and `err.message` leaked into the 500. The one survivor,
+    `fields: err.fields` (always present), is equivalent: `JSON.stringify` drops `undefined`, so the
+    wire output is identical and no HTTP-level test can distinguish it.
+35. **Retro #17 confirmed again.** The new test typechecks clean under a temporary tsconfig
+    (`include: ["src", "test/middleware"]`), but `pnpm typecheck` still skips `backend/test/`.
+36. **Mutation harness note.** `git checkout -- <file>` between mutants would have discarded the
+    uncommitted fix, so the run restored from a copy of the file instead. Worth remembering whenever
+    the file under test has unstaged changes.
