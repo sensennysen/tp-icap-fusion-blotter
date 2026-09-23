@@ -14,6 +14,13 @@ export class WebSocketBroadcaster {
       this.clients.add(socket);
       logger.debug({ clientCount: this.clients.size }, 'WebSocket client connected');
 
+      // Without a listener, a protocol violation from one client is an unhandled
+      // 'error' event and takes the whole process down. ws closes the socket
+      // itself after an error, so the 'close' handler below does the pruning.
+      socket.on('error', (err) => {
+        logger.warn({ err }, 'WebSocket client error');
+      });
+
       socket.on('close', () => {
         this.clients.delete(socket);
         logger.debug({ clientCount: this.clients.size }, 'WebSocket client disconnected');
