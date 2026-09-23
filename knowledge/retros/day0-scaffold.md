@@ -108,3 +108,34 @@
 17. **`pnpm typecheck` does not cover `backend/test/`.** `backend/tsconfig.json` has
     `include: ["src"]`, so type errors in tests are only caught by vitest's transpile-only run and
     ESLint. Follow-up (BACKLOG): add a `tsconfig.test.json` or widen `include`.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-005 (2026-09-23)
+
+18. **`WebSocketBroadcaster` had no direct tests.** `tradeService.test.ts` and
+    `routes/trades.test.ts` both replace it with a stub, so no test ever opened a real socket. Added
+    `backend/test/realtime/webSocketBroadcaster.test.ts` (real `ws` clients on an ephemeral port: fan-out,
+    all three event types, no replay for late joiners, `readyState !== OPEN` skip, pruning on close and
+    on abrupt terminate) and `backend/test/realtime/broadcastWiring.test.ts` (Express + broadcaster on one
+    `http.Server`, repository mocked, so no DB: POST/PATCH/cancel each push the right envelope to every
+    client, `/health` answers on the WS port, and 404/409/400 push nothing). "Nothing was sent" is proven
+    by following a failed call with a successful one and asserting it is the first frame, not by sleeping.
+    Mutation-checked: removing the OPEN guard, never pruning, sending to the first client only, sending
+    `payload` instead of the envelope, dropping the `request` handler and removing the cancel broadcast
+    each fail tests.
+19. **One malformed client frame crashes the whole backend.** `WebSocketBroadcaster` registers no
+    `'error'` listener on client sockets, so a protocol violation is an unhandled `'error'` event ->
+    uncaught exception -> process exit (reproduced outside vitest against the real class: a masked frame
+    with RSV1 set gives `RangeError: Invalid WebSocket frame: RSV1 must be clear`). Any client that can
+    reach the port can take the server down. **Fixed in the same branch:** `WebSocketBroadcaster` now
+    attaches `socket.on('error', ...)` that logs at `warn`; `ws` closes the socket itself, so the
+    existing `close` handler still does the pruning. Covered by a real test (malformed frame -> client
+    pruned, `warn` logged, remaining clients still receive broadcasts). Mutation-checked: removing the
+    listener fails that test and vitest reports the uncaught `RangeError`. A real `server.ts` on a spare
+    port answers `/health` 200 before and after the malformed frame.
+20. **`broadcaster.close()` does not close clients.** It only calls `wss.close()`; verified that an
+    open client stays OPEN and `http.Server.close()` then never completes. `server.ts` has no shutdown
+    path today, so this only bites tests and any future graceful-shutdown work. The new tests terminate
+    clients before closing. Follow-up (BACKLOG): have `close()` terminate `wss.clients`.
+21. **`server.ts` cannot be imported by a test** (it calls `listen` on load), so the wiring test
+    re-creates its five lines and would not notice if `server.ts` drifted. Follow-up (BACKLOG): extract a
+    `createServerApp()` factory that `server.ts` and the tests both call.
