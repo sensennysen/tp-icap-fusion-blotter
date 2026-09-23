@@ -250,3 +250,38 @@
 45. **Retro #17 confirmed again.** Both files typecheck clean under a temporary tsconfig
     (`include: ["src", "test/app.test.ts", "test/routes"]`), but `pnpm typecheck` still skips
     `backend/test/`. The temp tsconfig must live in `backend/` (a scratchpad copy cannot resolve `types`).
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-009 (2026-09-24)
+
+46. **The seed had no tests and ran at import time.** `seed.ts` called `seed()` on load and did not
+    export it, so nothing could import it under test. Extracted `backend/src/seedTrades.ts`
+    (`generateTrades`, `seedIfEmpty(client, count)`); `seed.ts` is now the thin entry point. Behaviour is
+    unchanged: 500 trades, ~10% `CANCELLED`, skip if `count() > 0`, same `TRD-100001+` ids.
+47. **The empty-table branch can't be tested against the dev DB** without emptying it (retro #12).
+    `seedIfEmpty` takes a `SeedClient` slice of Prisma, so a stateful fake covers "empty -> seed,
+    non-empty -> skip, twice -> once". The real client covers the skip branch (dev DB is non-empty) and
+    a prefix-scoped insert of 50 generated rows (`TEST-SEED-`) proving they satisfy the DB constraints.
+48. **New tests:** `test/seedTrades.test.ts` (16, generator + fake client + real Postgres) and
+    `test/seedWiring.test.ts` (3, Dockerfile CMD order and `&&` chaining, `seed` script path). The
+    automated Docker check is static; `/validate` also booted the real image twice by hand (below).
+49. **Mutation-checked, 14 real mutants, 14 killed** (guard `> 1`, inverted, falls through; cancel
+    rate; count 1500; quantity 0 and 5001; price 0 and 5 decimals; id off by one and duplicated;
+    `createMany` count; CMD order; `;` for `&&`; future timestamp). The first pass let "quantity can be 0"
+    survive: it happens about 1 in 5,000, so 1,000 random samples rarely hit it. Fixed by pinning
+    `Math.random` to 0 and 0.999999. Two of my own mutations were no-ops (a comment, a `void 0`) and
+    "survived" trivially; check that a survivor is a real change before trusting it.
+50. **Retro #43 also applies to the seed.** Seeded ids are `TRD-100001..100500` and `nextTradeId()` is
+    `count + 100001`, so a create after the seed gets `TRD-100501`. That holds only while no row has
+    been deleted. Still open: a DB sequence, or retry on P2002.
+51. **graphify has no node for `seed.ts`** (`graphify path` found no route to `tradeRepository.ts` or
+    `Trade`). Blast radius was traced by hand: no file imports the seed, and the Dockerfile and
+    `package.json` invoke it by path.
+52. **Validated end to end against real empty databases** (throwaway DBs in the compose Postgres,
+    dropped afterwards; the dev DB stayed at 500 rows). `pnpm seed` twice: 0 -> 500 rows (51
+    cancelled) -> still 500, second run logs "already seeded, skipping". Built the backend image and
+    booted it twice: boot 1 applied both migrations, seeded 500, then logged "Backend listening";
+    boot 2 said "No pending migrations", skipped the seed (`existingCount: 500`) and still listened.
+    So all three TASK-009 acceptance criteria hold in the real container, not just in tests.
+53. **Env override for a scratch DB works** (`DATABASE_URL=... pnpm seed`): `loadEnv` does not
+    override an already-set variable, so a throwaway database can be targeted without editing `.env`.
+    Handy for any future "needs an empty table" check that must not touch dev data.
