@@ -26,9 +26,12 @@ const features = tableFeatures({
 
 const columnHelper = createColumnHelper<typeof features, Trade>();
 
+// Prices are stored as Decimal(12,4); show up to 4dp so an amend in the 3rd/4th place is visible.
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
 });
 
 const EMPTY_TRADES: Trade[] = [];
