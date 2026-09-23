@@ -139,3 +139,36 @@
 21. **`server.ts` cannot be imported by a test** (it calls `listen` on load), so the wiring test
     re-creates its five lines and would not notice if `server.ts` drifted. Follow-up (BACKLOG): extract a
     `createServerApp()` factory that `server.ts` and the tests both call.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-006 (2026-09-24)
+
+22. **`TradeService` had 5 tests that left most of its acceptance criteria unproven.** The CSV is
+    `Done` and the code was correct, so this was test hardening only (`tradeService.ts` untouched).
+    Gaps in `backend/test/tradeService.test.ts`: `amend` had no happy path (no `TRADE_AMENDED`
+    assertion at all), "broadcast exactly once" was only `toHaveBeenCalledWith`, the two conflict tests
+    never checked that `update`/`cancel`/`broadcast` were not called, `list` was untested, and the
+    409/404 status codes were never asserted (only `instanceof`). Now 15 tests + 1 `it.todo`: every
+    method's happy path with `toHaveBeenCalledTimes(1)` and the exact envelope, 409 (`statusCode` and
+    `code`) and 404 for both `amend` and `cancel` with "nothing else called", repository rejection ->
+    no broadcast for create/amend/cancel, `create` passing `{ tradeId, ...input }`, `list` delegation,
+    and a double-cancel sequence (one broadcast, one repository write). Mutation-checked, 13/13 killed:
+    each `CANCELLED` guard removed, each of the three broadcasts removed, wrong event type on amend and
+    cancel, create broadcasting twice, `getById` skipped in amend and in cancel, `tradeId` dropped, the
+    `list` query ignored, the `amend` input ignored, and the amend broadcast carrying the pre-update
+    trade.
+23. **`amend`/`cancel` are check-then-act and not safe under concurrency.** `getById` then
+    `update`/`cancel` with no transaction or conditional write, so two concurrent cancels can both
+    pass the `CANCELLED` guard and both broadcast `TRADE_CANCELLED`; two concurrent amends can also
+    both succeed after a cancel lands between the read and the write. A mocked repository cannot
+    express this, so it is an `it.todo`. Follow-up (BACKLOG): conditional write in the repository
+    (`updateMany` where `status = 'ACTIVE'`, treating count 0 as a conflict) or a transaction.
+24. **Where the CSV's "live curl confirming 409" claim is actually covered.** Not in
+    `tradeService.test.ts` (repository mocked, no HTTP). It is covered by `routes/trades.test.ts`
+    (real Postgres, 409 through the error envelope) and `broadcastWiring.test.ts` (409 pushes nothing).
+    The service tests now assert the `statusCode`/`code` the error handler maps from.
+25. **`TradeService` is typed to the concrete `WebSocketBroadcaster` class**, so the tests build it
+    with `{ broadcast } as never`. `Pick<WebSocketBroadcaster, 'broadcast'>` would remove the cast with
+    no runtime change; left out of this pass to keep it test-only. Follow-up (BACKLOG).
+26. **Retro #17 confirmed, and worked around.** The new test file typechecks clean under a temporary
+    tsconfig that includes it (`backend/tsconfig.json` still has `include: ["src"]`), so the file is
+    type-correct today, but `pnpm typecheck` would not have caught a regression.
