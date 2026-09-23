@@ -419,3 +419,55 @@ src/server.ts"` does not match the tsx process (its argv is `… loader.mjs src/
     `importOriginal<typeof import(...)>` and re-clusters `useTrades.ts` / `TradeBlotterPage.tsx`
     into the `useRealtimeTrades.ts` community. Both are artifacts like #61/#70, not dependencies.
     `coding-standards.md` now describes the multi-variant reconcile.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-013 (2026-09-24)
+
+83. **ToastProvider had no tests of its own.** It was only exercised through the spy wrapper in
+    `useRealtimeTrades.test.tsx`. It now has `frontend/test/ToastProvider.test.tsx` (17 tests).
+84. **Auto-dismiss timers leaked.** `setTimeout` was never cleared: not on dismiss, and not on
+    provider unmount. Timers now live in a `useRef<Map>`. `dismissToast` clears the toast's
+    timer, and an unmount effect clears all of them.
+85. **The context value was a new object on every render.** Every `useToast()` consumer
+    re-rendered whenever the provider rendered. The value is now `useMemo`'d.
+    `showToast` / `dismissToast` were already stable.
+86. **Toasts could not be dismissed by hand.** `dismissToast` was exposed but nothing called it.
+    Each toast now has a lucide `X` button (`aria-label="Dismiss notification"`).
+87. **Error toasts were announced politely.** Errors now use `role="alert"`; info, success and
+    connection keep `role="status"`. The message is in its own `<span>`, so existing
+    `getByText(message)` checks still match.
+88. **The stack had no cap.** The connect-then-drop flap (#80) could pile up lost/restored pairs
+    without limit. `MAX_TOASTS = 5` now evicts the oldest toast along with its timer. The `Map`'s
+    insertion order matches the display order, so eviction happens outside the state updater
+    and the updater stays pure.
+89. **`crypto.randomUUID()` requires a secure context.** It is undefined when the app is opened
+    over plain HTTP on a LAN IP, so the first toast would have thrown. Ids now come from a
+    per-provider counter.
+90. **Mutation-checked: 15 mutants, all killed.** The toast-specific test pattern is in
+    `knowledge/patterns/toast-provider-tests.md`. `useRealtimeTrades.test.tsx` passes unchanged,
+    so the public API (`toasts`, `showToast`, `dismissToast`) is intact.
+91. **Still open, out of scope for TASK-013:**
+    - `TradeBlotterPage`'s success/failure toasts have no test yet (they belong to TASK-018).
+    - graphify still has no edge from `useRealtimeTrades.ts` / `TradeBlotterPage.tsx` to
+      `ToastProvider.tsx` (#80), so `graphify path` reports no path. Use grep for blast radius.
+    - Hovering a toast does not pause its auto-dismiss. Not required by ARCH §11.
+
+## Found by `/validate` on TASK-013 (2026-09-24)
+
+92. **`/validate`: checked in the real app with headless Chrome (CDP), no DB writes.** The Chrome
+    extension was not connected, so the check ran Chrome with `--headless=new
+--remote-debugging-port` and drove it with a small Node CDP script. Stopping the backend
+    showed "Connection lost, reconnecting…" (`role=status`, `bg-toast-connection`, bottom-right,
+    with the X button). A create submitted while the backend was down showed "Failed to create
+    trade" (`role=alert`, `bg-toast-error`). Clicking its X removed only that toast. Restarting
+    the backend showed "Connection restored" about 10s later (backoff). Gotcha: a 5s toast
+    expires between separate CDP round-trips, so trigger, wait and assert inside one in-page
+    `Runtime.evaluate`.
+93. **BACKLOG: a local `pnpm dev` has no API/WS URL.** `VITE_API_BASE_URL` / `VITE_WS_URL` live in
+    the root `.env`, but Vite reads `.env` from `frontend/` (no `envDir` set). The page renders
+    "No trades match the current filters", with no error and no WebSocket. Docker Compose sets
+    both explicitly, so it hides the problem. Fix: `envDir: '..'` in `frontend/vite.config.ts`,
+    or validate the vars at startup (see #59/#80).
+94. **BACKLOG: a failed create/amend closes the modal and loses the user's input.**
+    `TradeBlotterPage`'s `onSubmit` catches the error to show the toast, so `CreateTradeModal`
+    always reaches `onClose()`. Rethrowing after the toast, or returning a success flag, would
+    keep the form open. Belongs to TASK-015/016/018.

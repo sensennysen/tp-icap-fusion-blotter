@@ -41,3 +41,5 @@ center them with flex layout or `mx-auto`, never a parent's `text-align: center`
 Single page, desktop-oriented (this is a trading tool; no mobile breakpoint spec was given).
 Toolbar (filters + New Trade + Refresh) above the grid; modals for create/amend; an inline
 confirm dialog for cancel; a fixed bottom-right toast stack for async/real-time feedback.
+Toasts auto-dismiss after 5s, each has a close button (`Dismiss notification`), the stack
+keeps the newest 5, and error toasts use `role="alert"` (others `role="status"`).
