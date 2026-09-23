@@ -22,7 +22,10 @@ change._
 - Forms use React Hook Form + the Zod resolver against schemas imported from
   `@fusion-blotter/shared` — never hand-roll validation that duplicates a shared schema.
 - `useRealtimeTrades` reconciles WebSocket events into the exact query cache key the active filter
-  set is reading — it must not trigger a network refetch per event.
+  set is reading — it must not trigger a network refetch per event. It does this for every cached
+  `[...tradesQueryKey, filters]` variant (each against its own filters) so a filter set revisited
+  within `staleTime` is not stale, and it skips variants with no data yet (their first fetch is the
+  source of truth). Frames that fail the `TradeEvent` guard are dropped, never thrown.
 - Tailwind v4: any hand-written base selector in `globals.css` (`html`, `body`, etc.) must live
   inside `@layer base { }` — an unlayered rule silently beats every `text-*`/`bg-*` utility
   app-wide, not just on hover.

@@ -358,3 +358,64 @@
     like #61, not real dependencies. The live-API check for AC1 was skipped because the dev stack
     was not running. Backend filter params are covered by `backend/test/routes/trades.test.ts`,
     and hook → `apiClient` → query string by the frontend suites.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-012 (2026-09-24)
+
+71. **The 4 original tests covered only the reconcile half of the ACs.** Nothing tested backoff,
+    the 30s cap, lost/restored toasts, the per-event toast, "no refetch", or unmount cleanup. The
+    hook's backoff schedule (1s doubling, 30s cap, reset on open) was already correct; it is now
+    pinned.
+72. **"Connection lost" toasted on every failed retry, not once per outage.** Browsers fire `close`
+    after each refused reconnect, so an outage produced a lost toast at 1s, 2s, 4s … 30s. The hook
+    now tracks `isConnected`: "lost" fires only on a connected → closed transition, and "restored"
+    only on an `open` after a loss. If the very first connect fails there is no toast, because
+    nothing was lost.
+73. **One malformed frame threw inside the `message` listener.** `JSON.parse` was unguarded, and an
+    unknown `type` still toasted `"undefined: …"`. Frames are now parsed and checked by
+    `isTradeEvent` (known type, object payload with string `id` and `tradeId`). Invalid frames
+    are dropped with no cache write and no toast.
+74. **Only the active filter key was reconciled.** Other cached `[...tradesQueryKey, filters]`
+    variants stayed stale and, under `staleTime: 30_000`, were shown stale when revisited. Every
+    cached variant is now reconciled against its own `queryKey[1]` filters. There is still no
+    refetch, and the active key is one of the variants.
+75. **An event could create a list that was never loaded.** `current ?? []` wrote `[payload]` into
+    a key whose first fetch was still in flight; if that fetch failed, the grid showed a one-row
+    list as real. Keys with no data are now skipped, so the fetch stays the source of truth.
+76. **Deviation from the plan text:** the plan said `filtersRef` stays "for the toast only", but the
+    toast never used filters. With per-variant reconcile the hook no longer needs `filters`, so
+    the parameter is `_filters`, kept so `TradeBlotterPage` is unchanged. Dropping it is a
+    follow-up that touches the page.
+77. **Not a defect: `reconcile` ignores `sort`/`order`.** `TradeGrid` sorts on the client
+    (`createSortedRowModel`, default `tradeTimestamp` desc), so row order in the cache is not
+    what the user sees.
+78. **New tests:** `frontend/test/useRealtimeTrades.test.tsx` went from 4 to 37. Covered:
+    reconcile branches, cross-variant reconcile, unloaded key, no refetch, `VITE_WS_URL`, filter
+    change keeps one socket, backoff and cap, reset, unmount, lost/restored/info toasts, and 11
+    malformed frames. The CSV AC still says "4 tests"; the CSV was left as is. Pattern in
+    `knowledge/patterns/use-realtime-trades-tests.md`.
+79. **Mutation-checked: 35 mutants, 34 killed by vitest, 1 killed by `tsc`.** The first pass had
+    3 survivors, because the `try` wrapped the guard as well as `JSON.parse`, so null checks were
+    swallowed by the `catch`. Narrowing the `try` to `JSON.parse` fixed two of them. The
+    remaining one, dropping `typeof data !== 'string'`, can't be observed at runtime
+    (`JSON.parse` coerces a Blob/ArrayBuffer to `"[object …]"` and throws), but `tsc` rejects
+    `JSON.parse(unknown)`.
+80. **Still open, out of scope for TASK-012:**
+    - `VITE_WS_URL` is an unvalidated `as string` cast (same as `BASE_URL`, #59).
+    - A server that accepts and then drops at once resets backoff on each `open`, so it
+      reconnects every 1s (with a lost/restored toast pair each time). Resetting only after a
+      stable period would fix it.
+    - graphify has no edge from `useRealtimeTrades.ts` to `ToastProvider.tsx`; the `useToast`
+      import exists (found by grep).
+81. **`/validate`: real frames pass the new guard.** The backend was started against a scratch
+    database (`trades_validate_012`, the #53 override; dropped afterwards). A create → amend →
+    cancel was captured from the real `WebSocketBroadcaster` and replayed through the hook in a
+    throwaway test: the `{}` list went 10 → 20 → CANCELLED and the trade was removed from the
+    `{ status: 'ACTIVE' }` variant. The dev database has 0 validation rows. Gotcha: `pkill -f "tsx
+src/server.ts"` does not match the tsx process (its argv is `… loader.mjs src/server.ts`), so a
+    second backend fails on a busy port. Kill by `lsof -t -iTCP:4000` instead.
+82. **`/validate` graph check: no unplanned boundary crossings.** New nodes (`isTradeEvent`,
+    `parseEvent`, `applyEvent`) are all in `useRealtimeTrades.ts`. graphify adds a phantom
+    `../src/components/Toast/ToastProvider.js` node from the test's
+    `importOriginal<typeof import(...)>` and re-clusters `useTrades.ts` / `TradeBlotterPage.tsx`
+    into the `useRealtimeTrades.ts` community. Both are artifacts like #61/#70, not dependencies.
+    `coding-standards.md` now describes the multi-variant reconcile.
