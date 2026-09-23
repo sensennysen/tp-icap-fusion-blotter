@@ -315,3 +315,46 @@
 61. **graphify now has the `useTrades.ts -> apiClient` import edge** (retro #58 said it had none, which was
     before `apiClient.ts` was re-extracted after the edit). The graph labels `ApiError` and its
     constructor as community `TradeService`; that is a name collision, not a real dependency.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-011 (2026-09-24)
+
+62. **`useTrades.ts` meets both acceptance criteria as written; no source change.** A filter change
+    re-queries `listTrades` with the new params under `[...tradesQueryKey, filters]`. All three
+    mutations invalidate the `['trades']` prefix on success, and because `onSuccess` returns the
+    `invalidateQueries` promise, `mutateAsync` resolves only after the refetch finishes.
+    `TradeBlotterPage`'s success toast therefore fires after the grid already shows the new data.
+    That behaviour is now pinned by a test.
+63. **The `useTrades` ↔ `useRealtimeTrades` coupling is only the key shape.** graphify has no edge
+    between the two hooks (both import `tradesQueryKey` from `queryClient.ts`). A test now pins the
+    exact key and proves a `setQueryData` write to it is read with no fetch.
+64. **A cleared filter reuses the unfiltered cache entry.** TanStack's key hash drops `undefined`,
+    so `{ symbol: undefined }` and `{}` are one query with one fetch. The `''` → `undefined` mapping
+    lives in `TradeFilters`, so the hook depends on that mapping.
+65. **Invalidation marks inactive filter variants stale too** (prefix match). Only the active query
+    refetches; the others refetch when revisited. This is intended and tested.
+66. **Test gotcha: `result.current` lags the cache by one notifyManager tick.** After
+    `await act(...)` resolves a deferred refetch, `getQueryData` already has the new list, but
+    `result.current.trades` does not until the batched `setTimeout(0)` notify runs. Use `waitFor` or
+    `getQueryData`. Verified in isolation with a bare `QueryObserver` + `MutationObserver`:
+    TanStack itself awaits the invalidation correctly.
+67. **New tests:** `frontend/test/useTrades.test.tsx` (19: list query, key contract, `isError`,
+    `refetch`, filter re-query / cache hit / cleared filter, per-mutation args + refetch + "resolves
+    after refetch" + failure pass-through, invalidation scope, type-level checks). Pattern in
+    `knowledge/patterns/use-trades-hook-tests.md`.
+68. **Mutation-checked, 16 mutants, 16 killed:** key or `queryFn` without `filters`; each `onSuccess`
+    dropped; wrong invalidation key; active-key-only invalidation; fire-and-forget invalidation;
+    amend args swapped or dropped; wrong cancel id; create input dropped; `?? []` dropped;
+    `isError` / `isLoading` hardcoded; `refetch` stubbed.
+69. **Still open, out of scope for TASK-011:**
+    - `TradeBlotterPage` ignores `isError`, so a failed list renders "No trades match the current
+      filters", the same as a real empty result. ARCH §11 only requires mutation toasts, so this is
+      a UX gap, not an AC failure.
+    - `retry: 1` on the app `QueryClient` (retro #59) still delays list errors by one retry.
+70. **`/validate` graph check: no unplanned boundary crossings.** The new nodes are the test file,
+    its helpers and the pattern doc. graphify re-clustered `useTrades.ts`, `queryClient.ts` and
+    `apiClient.ts` into a new `useTrades.test.tsx` community, and labels `useTrades()` as
+    `TradeService`. It also resolves the test's `waitFor` to `backend/test/realtime/helpers.ts`,
+    but the file imports it from `@testing-library/react`. Both are name or clustering artifacts
+    like #61, not real dependencies. The live-API check for AC1 was skipped because the dev stack
+    was not running. Backend filter params are covered by `backend/test/routes/trades.test.ts`,
+    and hook → `apiClient` → query string by the frontend suites.
