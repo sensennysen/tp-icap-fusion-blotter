@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../../src/app.js';
 import { TradeService } from '../../src/services/tradeService.js';
@@ -7,8 +7,13 @@ import { prisma } from '../../src/lib/prisma.js';
 const broadcaster = { broadcast: () => undefined } as never;
 const app = createApp(new TradeService(broadcaster));
 
+// POST /trades generates tradeId itself (TRD-<n>), so rows can't carry a test prefix.
+// Track the ids this file creates and delete only those, so the seeded dev DB survives.
+const created: string[] = [];
+
+// Distinctive symbols keep filter/sort assertions narrowed to this file's rows.
 const samplePayload = {
-  symbol: 'AAPL',
+  symbol: 'ZZROUTE',
   side: 'BUY',
   quantity: 100,
   price: 189.5,
@@ -17,8 +22,18 @@ const samplePayload = {
   counterparty: 'GOLDMAN',
 };
 
-beforeEach(async () => {
-  await prisma.trade.deleteMany();
+async function createTrade(overrides: Record<string, unknown> = {}) {
+  const res = await request(app)
+    .post('/api/trades')
+    .send({ ...samplePayload, ...overrides });
+  // Track before asserting, so a failed assertion can't leak the row.
+  if (res.body.data?.id) created.push(res.body.data.id);
+  expect(res.status).toBe(201);
+  return res.body.data as { id: string; tradeId: string; status: string };
+}
+
+afterEach(async () => {
+  await prisma.trade.deleteMany({ where: { id: { in: created.splice(0) } } });
 });
 
 afterAll(async () => {
@@ -26,70 +41,149 @@ afterAll(async () => {
 });
 
 describe('POST /api/trades', () => {
-  it('creates a trade', async () => {
+  it('creates a trade and returns it in a data envelope', async () => {
     const res = await request(app).post('/api/trades').send(samplePayload);
+    if (res.body.data?.id) created.push(res.body.data.id);
+
     expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ ...samplePayload, status: 'ACTIVE' });
     expect(res.body.data.tradeId).toMatch(/^TRD-\d+$/);
-    expect(res.body.data.status).toBe('ACTIVE');
+    expect(res.body.data.id).toEqual(expect.any(String));
   });
 
-  it('rejects an invalid payload with a VALIDATION_ERROR envelope', async () => {
+  it('rejects an invalid payload with a VALIDATION_ERROR envelope and persists nothing', async () => {
+    const before = await prisma.trade.count();
     const res = await request(app)
       .post('/api/trades')
       .send({ ...samplePayload, quantity: -1 });
+
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.fields).toEqual({ quantity: 'quantity must be positive' });
+    expect(await prisma.trade.count()).toBe(before);
   });
 });
 
 describe('GET /api/trades', () => {
   it('lists created trades', async () => {
-    await request(app).post('/api/trades').send(samplePayload);
-    const res = await request(app).get('/api/trades');
+    const trade = await createTrade();
+    const res = await request(app).get('/api/trades?symbol=ZZROUTE');
+
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data.map((t: { id: string }) => t.id)).toEqual([trade.id]);
   });
 
   it('filters by symbol', async () => {
-    await request(app).post('/api/trades').send(samplePayload);
-    await request(app)
-      .post('/api/trades')
-      .send({ ...samplePayload, symbol: 'MSFT' });
-    const res = await request(app).get('/api/trades?symbol=MSFT');
+    const a = await createTrade();
+    await createTrade({ symbol: 'ZZOTHER' });
+    const res = await request(app).get('/api/trades?symbol=ZZOTHER');
+
+    expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].symbol).toBe('MSFT');
+    expect(res.body.data[0].symbol).toBe('ZZOTHER');
+    expect(res.body.data[0].id).not.toBe(a.id);
+  });
+
+  it('sorts by the requested column and order', async () => {
+    await createTrade({ price: 20 });
+    await createTrade({ price: 10 });
+    await createTrade({ price: 30 });
+
+    const asc = await request(app).get('/api/trades?symbol=ZZROUTE&sort=price&order=asc');
+    const desc = await request(app).get('/api/trades?symbol=ZZROUTE&sort=price&order=desc');
+
+    expect(asc.body.data.map((t: { price: number }) => t.price)).toEqual([10, 20, 30]);
+    expect(desc.body.data.map((t: { price: number }) => t.price)).toEqual([30, 20, 10]);
+  });
+
+  it('rejects an invalid query with a VALIDATION_ERROR envelope', async () => {
+    const res = await request(app).get('/api/trades?side=HOLD');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.fields).toHaveProperty('side');
+  });
+});
+
+describe('GET /api/trades/:id', () => {
+  it('returns the trade in a data envelope', async () => {
+    const trade = await createTrade();
+    const res = await request(app).get(`/api/trades/${trade.id}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      id: trade.id,
+      tradeId: trade.tradeId,
+      symbol: 'ZZROUTE',
+    });
+  });
+
+  it('returns 404 for a missing trade', async () => {
+    const res = await request(app).get('/api/trades/does-not-exist');
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('PATCH /api/trades/:id', () => {
+  it('amends a trade and persists the change', async () => {
+    const trade = await createTrade();
+    const res = await request(app).patch(`/api/trades/${trade.id}`).send({ quantity: 250 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ id: trade.id, quantity: 250, symbol: 'ZZROUTE' });
+
+    const fetched = await request(app).get(`/api/trades/${trade.id}`);
+    expect(fetched.body.data.quantity).toBe(250);
+  });
+
+  it('rejects an invalid field with a VALIDATION_ERROR envelope and leaves the trade unchanged', async () => {
+    const trade = await createTrade();
+    const res = await request(app).patch(`/api/trades/${trade.id}`).send({ price: -5 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.fields).toEqual({ price: 'price must be positive' });
+
+    const fetched = await request(app).get(`/api/trades/${trade.id}`);
+    expect(fetched.body.data.price).toBe(189.5);
+  });
+
+  it('rejects amending a cancelled trade with 409', async () => {
+    const trade = await createTrade();
+    await request(app).post(`/api/trades/${trade.id}/cancel`);
+
+    const res = await request(app).patch(`/api/trades/${trade.id}`).send({ quantity: 200 });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('CONFLICT');
+  });
+
+  it('returns 404 for a missing trade', async () => {
+    const res = await request(app).patch('/api/trades/does-not-exist').send({ quantity: 200 });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
   });
 });
 
 describe('POST /api/trades/:id/cancel', () => {
   it('cancels a trade then rejects a second cancel with 409', async () => {
-    const created = await request(app).post('/api/trades').send(samplePayload);
-    const id = created.body.data.id;
+    const trade = await createTrade();
 
-    const first = await request(app).post(`/api/trades/${id}/cancel`);
+    const first = await request(app).post(`/api/trades/${trade.id}/cancel`);
     expect(first.status).toBe(200);
     expect(first.body.data.status).toBe('CANCELLED');
 
-    const second = await request(app).post(`/api/trades/${id}/cancel`);
+    const second = await request(app).post(`/api/trades/${trade.id}/cancel`);
     expect(second.status).toBe(409);
     expect(second.body.error.code).toBe('CONFLICT');
   });
-});
 
-describe('PATCH /api/trades/:id', () => {
-  it('rejects amending a cancelled trade with 409', async () => {
-    const created = await request(app).post('/api/trades').send(samplePayload);
-    const id = created.body.data.id;
-    await request(app).post(`/api/trades/${id}/cancel`);
-
-    const res = await request(app).patch(`/api/trades/${id}`).send({ quantity: 200 });
-    expect(res.status).toBe(409);
-  });
-});
-
-describe('GET /api/trades/:id', () => {
   it('returns 404 for a missing trade', async () => {
-    const res = await request(app).get('/api/trades/does-not-exist');
+    const res = await request(app).post('/api/trades/does-not-exist/cancel');
+
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('NOT_FOUND');
   });

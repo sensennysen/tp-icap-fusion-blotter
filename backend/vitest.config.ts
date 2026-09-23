@@ -5,8 +5,8 @@ export default defineConfig({
     environment: 'node',
     include: ['test/**/*.test.ts'],
     setupFiles: ['./test/setup.ts'],
-    // DB-backed suites share one Postgres, and routes/trades.test.ts wipes the
-    // whole trades table in beforeEach — run files serially so they can't race.
+    // DB-backed suites share one Postgres (and trade ids are count-derived, so
+    // concurrent creates could collide) — run files serially so they can't race.
     fileParallelism: false,
   },
 });
