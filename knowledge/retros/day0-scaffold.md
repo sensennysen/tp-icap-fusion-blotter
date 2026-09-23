@@ -64,3 +64,22 @@
    (BACKLOG): renumber bonus tasks or prefix IDs by CSV.
 8. **CSV files use CRLF line endings.** Scripted edits must read/write in binary or `newline=''`
    — Python text mode silently rewrites every line (a 1-row change showed as 22 rows in git).
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-003 (2026-09-23)
+
+9. **The DB CHECK constraints had no automated coverage.** Every backend test mocks
+   `tradeRepository`; CI ran `migrate deploy` before `pnpm test` but nothing exercised the DB.
+   Added `backend/test/db/checkConstraints.test.ts` (real Postgres, Prisma client directly,
+   asserts constraint names + the four indexes). Mutation-checked: with both constraints dropped,
+   6 of 7 tests fail.
+10. **`prisma7.config.ts` is auto-discovered** by the Prisma 7 CLI (`prisma debug` prints
+    "Loaded Prisma config from prisma7.config.ts") — no `--config` flag needed.
+11. **graphify has no edge from `schema.prisma` to `tradeRepository.ts`/`seed.ts`.** Graph
+    blast-radius for schema changes must be traced by hand until the extractor links Prisma
+    models to their consumers.
+12. **`routes/trades.test.ts` wipes the whole `trades` table** (`deleteMany()` with no filter in
+    `beforeEach`), so `pnpm test` empties whatever DB `DATABASE_URL` points at — including the
+    seeded dev DB. README warns to use a disposable DB, but `.env` points at the compose DB.
+    Fixed the parallel-race half (`fileParallelism: false` in `backend/vitest.config.ts`).
+    Follow-up (BACKLOG): point tests at a separate `trades_test` database (e.g. a `DATABASE_URL`
+    override in `test/setup.ts` or a `TEST_DATABASE_URL`) so tests never touch dev data.
