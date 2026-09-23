@@ -66,6 +66,8 @@ export function TradeGrid({ trades, isLoading, onAmend, onCancel }: TradeGridPro
         columnHelper.accessor('tradeTimestamp', {
           header: 'Timestamp',
           sortFn: 'datetime',
+          // ISO strings would auto-start ascending; newest-first matches the default sort.
+          sortDescFirst: true,
           cell: (info) => new Date(info.getValue()).toLocaleString(),
         }),
         columnHelper.accessor('status', { header: 'Status' }),
@@ -106,6 +108,9 @@ export function TradeGrid({ trades, isLoading, onAmend, onCancel }: TradeGridPro
     getRowId: (row) => row.id,
     state: { sorting },
     onSortingChange: setSorting,
+    // Headers toggle asc/desc on a single column; there is no "unsorted" third click.
+    enableSortingRemoval: false,
+    enableMultiSort: false,
   });
 
   if (isLoading) {
@@ -121,19 +126,32 @@ export function TradeGrid({ trades, isLoading, onAmend, onCancel }: TradeGridPro
       <thead>
         {table.getHeaderGroups().map((headerGroup) => (
           <tr key={headerGroup.id} className="border-b border-slate-200">
-            {headerGroup.headers.map((header) => (
-              <th key={header.id} scope="col" className="px-3 py-2 font-semibold text-slate-600">
-                <button
-                  type="button"
-                  className="flex items-center gap-1"
-                  onClick={header.column.getToggleSortingHandler()}
-                  disabled={!header.column.getCanSort()}
+            {headerGroup.headers.map((header) => {
+              const sorted = header.column.getIsSorted();
+              return (
+                <th
+                  key={header.id}
+                  scope="col"
+                  aria-sort={
+                    sorted === 'asc' ? 'ascending' : sorted === 'desc' ? 'descending' : undefined
+                  }
+                  className="px-3 py-2 font-semibold text-slate-600"
                 >
-                  {flexRender(header.column.columnDef.header, header.getContext())}
-                  {{ asc: ' ▲', desc: ' ▼' }[header.column.getIsSorted() as string] ?? ''}
-                </button>
-              </th>
-            ))}
+                  {header.column.getCanSort() ? (
+                    <button
+                      type="button"
+                      className="flex items-center gap-1"
+                      onClick={header.column.getToggleSortingHandler()}
+                    >
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {sorted && <span aria-hidden="true">{sorted === 'asc' ? '▲' : '▼'}</span>}
+                    </button>
+                  ) : (
+                    flexRender(header.column.columnDef.header, header.getContext())
+                  )}
+                </th>
+              );
+            })}
           </tr>
         ))}
       </thead>
