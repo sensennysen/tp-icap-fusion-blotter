@@ -285,3 +285,33 @@
 53. **Env override for a scratch DB works** (`DATABASE_URL=... pnpm seed`): `loadEnv` does not
     override an already-set variable, so a throwaway database can be targeted without editing `.env`.
     Handy for any future "needs an empty table" check that must not touch dev data.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-010 (2026-09-24)
+
+54. **`apiClient.ts` had no tests and several unhandled failure paths.** `res.json()` ran unguarded, so
+    a 502 HTML page from a proxy threw a raw `SyntaxError`. A JSON error body without `error` threw a
+    `TypeError` on `body.error.code`, and a rejected `fetch` surfaced as a bare `TypeError`. All three
+    now become `ApiError` (`HTTP_ERROR` with the HTTP status, or `NETWORK_ERROR` with status 0 and
+    `cause`). The server envelope still passes `code`, `message` and `fields` through unchanged.
+55. **`ApiError` never set `name`**, so it logged as `Error`. It now sets `name = 'ApiError'`.
+56. **Path ids were interpolated raw.** `getTrade`, `amendTrade` and `cancelTrade` now
+    `encodeURIComponent` the id, so an id containing `/`, `?` or `#` cannot change the route.
+57. **New tests:** `frontend/test/apiClient.test.ts` (30: request shape, query string, id encoding,
+    envelope unwrapping, `ApiError` mapping, non-envelope failures, type-level checks). Pattern in
+    `knowledge/patterns/api-client-tests.md`.
+58. **graphify has no call edges from `useTrades.ts` to `apiClient`**, so blast radius was traced by
+    grep: `useTrades.ts` is the only importer, and nothing else references `ApiError`.
+59. **Still open, out of scope for TASK-010:**
+    - `BASE_URL` is cast with `as string` and never validated; an unset variable gives `undefined/trades`.
+    - `queryClient` sets `retry: 1`, so a 400 or 409 `ApiError` is retried once before it surfaces.
+    - A 2xx with an unparseable body still throws a `TypeError` on `.data`; the backend never sends one.
+    - No component reads `ApiError.code` or `fields` yet, and `getTrade` has no consumer.
+60. **Mutation-checked, 32 real mutants, 32 killed.** Mutants covered method and path swaps, dropped
+    `encodeURIComponent` (all three methods), dropped `fields`, swapped `code` and `message`, wrong
+    status, each fallback field, the JSON guard, the `fetch` catch, `cause`, the `undefined` filter,
+    the `?` handling, the `Content-Type` header, `data` unwrapping, the `!res.ok` branch and each clause
+    of `isErrorEnvelope`. The first pass let "drop the `error !== null` check" survive: `{ "error": null }`
+    was untested and would have thrown a `TypeError` on `.code`. Added that case and re-ran it (killed).
+61. **graphify now has the `useTrades.ts -> apiClient` import edge** (retro #58 said it had none, which was
+    before `apiClient.ts` was re-extracted after the edit). The graph labels `ApiError` and its
+    constructor as community `TradeService`; that is a name collision, not a real dependency.
