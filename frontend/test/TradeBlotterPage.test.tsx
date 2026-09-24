@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent, { type UserEvent } from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { Trade, TradeEvent } from '@fusion-blotter/shared';
+import type { AuthUser, Trade, TradeEvent } from '@fusion-blotter/shared';
 import { TradeBlotterPage } from '../src/pages/TradeBlotterPage.js';
 import { ToastProvider } from '../src/components/Toast/ToastProvider.js';
 import { field, fill, json, validText } from './tradeForm.js';
@@ -56,12 +56,14 @@ let queryClient: QueryClient;
 let mutationResponse: () => Response;
 let listResponse: (url: URL) => Response;
 
-function renderPage() {
+const trader: AuthUser = { username: 'asmith', role: 'trader' };
+
+function renderPage(sessionUser: AuthUser = trader, onLogout = vi.fn()) {
   const user = userEvent.setup();
   render(
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <TradeBlotterPage />
+        <TradeBlotterPage user={sessionUser} onLogout={onLogout} />
       </ToastProvider>
     </QueryClientProvider>,
   );
@@ -328,5 +330,34 @@ describe('TradeBlotterPage toolbar and live data', () => {
     expect(rowOf('TRD-100001')).toHaveClass('opacity-50');
     expect(within(rowOf('TRD-100001')).queryByRole('button')).not.toBeInTheDocument();
     expect(listCalls()).toHaveLength(1);
+  });
+});
+
+describe('TradeBlotterPage session', () => {
+  it('shows who is signed in and signs out through onLogout', async () => {
+    const onLogout = vi.fn();
+    const user = renderPage(trader, onLogout);
+
+    expect(screen.getByText(/Signed in as/)).toHaveTextContent('Signed in as asmith (trader)');
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    expect(onLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives a trader the New Trade and row actions', async () => {
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Amend' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New Trade' })).toBeInTheDocument();
+  });
+
+  it('gives a viewer a read-only blotter: rows, but no New Trade or row actions', async () => {
+    renderPage({ username: 'vwong', role: 'viewer' });
+
+    expect(await screen.findByText('TRD-100001')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New Trade' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Amend' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Actions' })).not.toBeInTheDocument();
   });
 });

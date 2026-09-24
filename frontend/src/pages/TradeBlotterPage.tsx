@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Plus, RefreshCw } from 'lucide-react';
-import type { Trade, TradeListQuery } from '@fusion-blotter/shared';
+import { LogOut, Plus, RefreshCw } from 'lucide-react';
+import type { AuthUser, Trade, TradeListQuery } from '@fusion-blotter/shared';
 import { TradeGrid } from '../components/TradeGrid.js';
 import { TradeFilters } from '../components/TradeFilters.js';
 import { CreateTradeModal } from '../components/CreateTradeModal.js';
@@ -10,7 +10,14 @@ import { useTrades } from '../hooks/useTrades.js';
 import { useRealtimeTrades } from '../hooks/useRealtimeTrades.js';
 import { useToast } from '../components/Toast/ToastProvider.js';
 
-export function TradeBlotterPage() {
+interface TradeBlotterPageProps {
+  user: AuthUser;
+  onLogout: () => void;
+}
+
+export function TradeBlotterPage({ user, onLogout }: TradeBlotterPageProps) {
+  // Viewers are read-only; the API would reject their mutations with 403.
+  const canEdit = user.role === 'trader';
   const [filters, setFilters] = useState<TradeListQuery>({});
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [amendTarget, setAmendTarget] = useState<Trade | null>(null);
@@ -24,7 +31,23 @@ export function TradeBlotterPage() {
 
   return (
     <main className="mx-auto max-w-6xl p-6">
-      <h1 className="mb-4 text-xl font-semibold text-slate-900">Trade Blotter</h1>
+      <header className="mb-4 flex items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold text-slate-900">Trade Blotter</h1>
+        <div className="flex items-center gap-3 text-sm text-slate-600">
+          <span>
+            Signed in as <span className="font-medium text-slate-900">{user.username}</span> (
+            {user.role})
+          </span>
+          <button
+            type="button"
+            onClick={onLogout}
+            className="flex items-center gap-1 rounded border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-100"
+          >
+            <LogOut size={16} />
+            Sign out
+          </button>
+        </div>
+      </header>
 
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <TradeFilters filters={filters} onChange={setFilters} />
@@ -43,14 +66,16 @@ export function TradeBlotterPage() {
             <RefreshCw size={16} />
             Refresh
           </button>
-          <button
-            type="button"
-            onClick={() => setIsCreateOpen(true)}
-            className="flex items-center gap-1 rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-          >
-            <Plus size={16} />
-            New Trade
-          </button>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => setIsCreateOpen(true)}
+              className="flex items-center gap-1 rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              <Plus size={16} />
+              New Trade
+            </button>
+          )}
         </div>
       </div>
 
@@ -66,6 +91,7 @@ export function TradeBlotterPage() {
             isLoading={isLoading}
             onAmend={setAmendTarget}
             onCancel={setCancelTarget}
+            readOnly={!canEdit}
           />
         )}
       </div>
