@@ -632,3 +632,90 @@ src/server.ts"` does not match the tsx process (its argv is `… loader.mjs src/
       round trips per keystroke (15 `OPTIONS` for 15 `GET`s in #114). Fix: send the header only
       when there is a body, or set `maxAge` on `cors()`. This is the `apiClient` / backend
       boundary (TASK-010/005), not the filters.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-016 (2026-09-24)
+
+116.  **A failed create/amend closed the modal and lost the input (closes #94).**
+      `TradeBlotterPage` swallowed the mutation error after the toast, so the modal always
+      reached `onClose()`. The page now rethrows after the error toast. Each modal catches the
+      rejection, stays open with the input intact, and calls `onClose()` only after `onSubmit`
+      resolves. Catching inside the modal also stops `handleSubmit` leaking an unhandled
+      rejection.
+117.  **The shared schema allowed values the database can't store.** `quantity` is a 32-bit
+      `INTEGER` and `price` is `DECIMAL(12,4)`, but the schema only checked "positive". A
+      quantity above 2^31−1 got a 500, and a 5dp price was silently rounded by Postgres. The
+      schema now has `MAX_QUANTITY`, `MAX_PRICE` and a ≤4dp refine
+      (`Number(v.toFixed(4)) === v`, which is exact, with no float tolerance). The form and the
+      API both enforce these through `shared/`. 200k seed-style prices all pass.
+118.  **Empty number inputs showed Zod's raw type error.** `valueAsNumber` turns an empty input
+      into `NaN`. `numberError(field)` now reports missing/`null`/`NaN` as "… is required" and
+      other non-numbers as "… must be a number". `.int()` has its own message, because a
+      schema-level `error` otherwise overrides the check's default ("required" for 1.5).
+119.  **Native validation hid the shared messages.** `step="0.0001"` let the browser block a
+      5dp price with its own tooltip before Zod ran. Both forms are now `noValidate`, so every
+      message comes from `shared/`. jsdom can't show this. It was a deviation from the plan,
+      for the "same rules" AC.
+120.  **Server field errors are shown next to their inputs.** `setServerFieldErrors` maps an
+      `ApiError`'s `fields` onto known form fields with `setError`, and ignores other keys
+      such as `_`. The toast still reports the failure as a whole.
+121.  **`Modal` fixes:** `useId()` replaces the hardcoded `id="modal-title"`, which was
+      duplicated if two dialogs were open. Escape closes the dialog, and its listener is
+      removed on unmount. The dialog takes focus when it mounts.
+122.  **New tests:** 48 in `schemas.test.ts` (up from 31). `CreateTradeModal.test.tsx` has 24
+      (up from 3), `AmendTradeModal.test.tsx` 14 (new), and `TradeBlotterPage.test.tsx` 4
+      (new). Helpers are in `frontend/test/tradeForm.ts`. 18 of the 42 fail against the old
+      code, and so do the new shared limit tests. Mutation-checked: 24 mutants, 23 killed, and
+      the 1 survivor (`defaultValues: { side: 'BUY' }`) is equivalent. Pattern in
+      `knowledge/patterns/trade-form-modal-tests.md`.
+123.  **Still open, out of scope for TASK-016:**
+      - #6: `amendTradeSchema` still accepts `{}`. The amend form always sends all 7 fields,
+        not just the changed ones, so an unchanged "Save" is a real PATCH and broadcast.
+      - No focus trap and no return of focus to the opener on close. Tab can leave the dialog.
+      - No backdrop-click close. Left out on purpose, so a stray click can't discard a form.
+
+## Found by `/validate` on TASK-016 (2026-09-24)
+
+124.  **`/validate`: checked in the real app with headless Chrome (CDP), no DB writes.** The
+      local backend was already running and had been started after the schema change. Vite
+      was started with the URLs on the command line (#93 is still open). Every POST and PATCH
+      was answered by the script using CDP `Fetch.fulfillRequest` and never reached the
+      backend. Afterwards the DB still had 500 rows, the amended trade was unchanged, and no
+      trades had been created. Results:
+      - The create dialog takes focus on open, and its accessible name is "New Trade". Side
+        defaults to BUY.
+      - An empty submit shows all 6 shared "… is required" messages and sends no request.
+      - A 5dp price, a quantity of 1.5 or 2^31, a price of 1e8, and a whitespace-only Symbol
+        each show the exact shared message and send no request. Chrome's own `validity` reports
+        `stepMismatch` for the 5dp price and for 1.5.
+      - With `noValidate` removed in the page, the same 5dp submit is blocked by the browser
+        and no Zod message appears (`checkValidity() === false`). This is the #119 bug, and it
+        shows `noValidate` is required.
+      - A valid create answered with 500 shows the "Failed to create trade" toast. The dialog
+        stays open with `" AAPL "`, SELL and 10.1249 intact. The request body was trimmed and
+        numeric: `{symbol:"AAPL", side:"SELL", quantity:100, price:10.1249, …}`.
+      - A simulated 400 envelope with `fields.symbol` shows the message under Symbol, and the
+        `_` key is not rendered.
+      - Escape, × and Cancel each close the dialog.
+      - Amend on a real trade (TRD-100450, SELL, 387.0572) pre-fills all 7 fields exactly, and
+        the dialog is titled "Amend TRD-100450". A 10.12491 price is rejected client-side. A
+        valid edit answered with 409 shows the "Failed to amend trade" toast and keeps 411.25.
+        The PATCH went to `/trades/:id` with all 7 fields.
+      - No console errors and no uncaught exceptions or unhandled rejections.
+      - The live API returns 400 with the same field messages for a 5dp price, a quantity of
+        2^31, a price of 1e8 and a null quantity, on both POST and PATCH. Before this task,
+        the oversized quantity was a 500 and the 5dp price was silently rounded.
+      - Not checked live: a successful create or amend, because that needs a DB write. It is
+        covered by the wired tests (#122).
+
+      Gotchas:
+      - A fulfilled cross-origin response needs `Access-Control-Allow-Origin` in its headers,
+        or the page sees a network error instead of the status you chose.
+      - Let `GET` and `OPTIONS` through with `Fetch.continueRequest`, and answer everything
+        else.
+      - Set React-controlled inputs with the native `value` setter plus an `input` (or, for
+        a select, `change`) event. Assigning `.value` directly leaves RHF's state stale.
+
+125.  **BACKLOG: Escape or Cancel while a submit is pending closes the modal anyway.** If that
+      request then fails, the toast appears but the typed input is gone. Fix: ignore dismissal
+      while `isSubmitting`, or disable Cancel and × and skip Escape while it is set. Low
+      impact, because the user chose to close.
