@@ -35,11 +35,14 @@ services:
           'CMD',
           'node',
           '-e',
-          "fetch('http://localhost:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://localhost:4000/health').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 5s
       timeout: 5s
       retries: 10
+      # CMD runs migrate + seed before the server listens; give first boot
+      # headroom so a slow host doesn't exhaust retries and block the frontend.
+      start_period: 30s
 
   frontend:
     build:

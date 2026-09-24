@@ -1,0 +1,27 @@
+# Build context is the repo root (both Dockerfiles). Keep host-built artifacts
+# out: `COPY backend backend` / `COPY frontend frontend` would otherwise copy the
+# host's node_modules (pnpm symlinks, Windows junctions), Prisma client and
+# dist/ over what the container just installed and built.
+**/node_modules
+**/dist
+**/build
+**/coverage
+**/generated
+**/graphify-out
+.pnpm-store
+
+# Secrets never enter the build context — compose injects runtime env.
+.env
+.env.*
+!.env.example
+
+# Not needed by either image.
+.git
+.github
+.husky
+.vscode
+.idea
+docs
+knowledge
+**/*.log
+**/.DS_Store
