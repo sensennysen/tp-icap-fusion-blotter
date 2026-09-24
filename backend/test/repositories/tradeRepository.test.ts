@@ -199,6 +199,7 @@ describe('tradeRepository.update', () => {
     await sleep(5);
 
     const updated = await tradeRepository.update(created.id, { quantity: 250, price: 190.25 });
+    if (!updated) throw new Error('expected the update to apply');
 
     expect(updated).toEqual({
       ...created,
@@ -210,10 +211,35 @@ describe('tradeRepository.update', () => {
     expect(await tradeRepository.findById(created.id)).toEqual(updated);
   });
 
-  it('rejects an unknown id with Prisma P2025 (the service owns the 404)', async () => {
-    await expect(tradeRepository.update('does-not-exist', { quantity: 1 })).rejects.toMatchObject({
-      code: 'P2025',
-    });
+  it('returns null for an unknown id (the service owns the 404)', async () => {
+    expect(await tradeRepository.update('does-not-exist', { quantity: 1 })).toBeNull();
+  });
+
+  it('returns null and changes nothing for a cancelled trade', async () => {
+    const { id } = await seed('UPD-CXL', { status: 'CANCELLED' });
+
+    expect(await tradeRepository.update(id, { quantity: 999 })).toBeNull();
+    expect((await tradeRepository.findById(id))?.quantity).toBe(100);
+  });
+
+  it('does not amend a trade cancelled concurrently', async () => {
+    const created = await tradeRepository.create(baseRecord('UPD-RACE'));
+
+    const [updated, cancelled] = await Promise.all([
+      tradeRepository.update(created.id, { quantity: 999 }),
+      tradeRepository.cancel(created.id),
+    ]);
+
+    // Either order is fine, but an amend must never land on a cancelled row.
+    const stored = await tradeRepository.findById(created.id);
+    expect(cancelled?.status).toBe('CANCELLED');
+    expect(stored?.status).toBe('CANCELLED');
+    if (updated) {
+      expect(updated.status).toBe('ACTIVE');
+      expect(cancelled?.quantity).toBe(999);
+    } else {
+      expect(stored?.quantity).toBe(100);
+    }
   });
 });
 
@@ -223,21 +249,29 @@ describe('tradeRepository.cancel', () => {
 
     const cancelled = await tradeRepository.cancel(created.id);
 
-    expect(cancelled.status).toBe('CANCELLED');
+    expect(cancelled?.status).toBe('CANCELLED');
     expect((await tradeRepository.findById(created.id))?.status).toBe('CANCELLED');
   });
 
-  it('does not itself reject a second cancel (the service owns the 409)', async () => {
+  it('returns null for a second cancel (the service owns the 409)', async () => {
     const created = await tradeRepository.create(baseRecord('CXL2'));
     await tradeRepository.cancel(created.id);
 
-    expect((await tradeRepository.cancel(created.id)).status).toBe('CANCELLED');
+    expect(await tradeRepository.cancel(created.id)).toBeNull();
   });
 
-  it('rejects an unknown id with Prisma P2025', async () => {
-    await expect(tradeRepository.cancel('does-not-exist')).rejects.toMatchObject({
-      code: 'P2025',
-    });
+  it('returns null for an unknown id', async () => {
+    expect(await tradeRepository.cancel('does-not-exist')).toBeNull();
+  });
+
+  it('lets exactly one of several concurrent cancels win', async () => {
+    const created = await tradeRepository.create(baseRecord('CXL-RACE'));
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => tradeRepository.cancel(created.id)),
+    );
+
+    expect(results.filter((r) => r !== null)).toHaveLength(1);
   });
 });
 
@@ -248,14 +282,15 @@ describe('tradeRepository.nextTradeId', () => {
     expect(await tradeRepository.nextTradeId()).toMatch(/^TRD-\d{6,}$/);
   });
 
-  it('advances by one after a trade is created', async () => {
-    const before = numeric(await tradeRepository.nextTradeId());
-    await tradeRepository.create(baseRecord('SEQ'));
+  it('never issues the same id twice, even without a create in between', async () => {
+    const first = numeric(await tradeRepository.nextTradeId());
 
-    expect(numeric(await tradeRepository.nextTradeId())).toBe(before + 1);
+    expect(numeric(await tradeRepository.nextTradeId())).toBeGreaterThan(first);
   });
 
-  // Known limitation (retro item 13): the code is count()-based, so two
-  // concurrent creates can be issued the same tradeId.
-  it.todo('issues unique ids under concurrent creates');
+  it('issues unique ids under concurrent calls', async () => {
+    const ids = await Promise.all(Array.from({ length: 20 }, () => tradeRepository.nextTradeId()));
+
+    expect(new Set(ids).size).toBe(20);
+  });
 });

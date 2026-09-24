@@ -5,6 +5,7 @@ import {
   DEFAULT_SEED_COUNT,
   generateTrades,
   seedIfEmpty,
+  SYNC_TRADE_ID_SEQUENCE_SQL,
   type SeedClient,
 } from '../src/seedTrades.js';
 
@@ -23,8 +24,12 @@ function statefulClient(initialRows = 0) {
   const createMany = vi.fn(async ({ data }: { data: unknown[] }) => {
     rows += data.length;
   });
-  const client: SeedClient = { trade: { count: async () => rows, createMany } };
-  return { client, createMany };
+  const executeRaw = vi.fn(async () => 0);
+  const client: SeedClient = {
+    trade: { count: async () => rows, createMany },
+    $executeRawUnsafe: executeRaw,
+  };
+  return { client, createMany, executeRaw };
 }
 
 beforeEach(() => {
@@ -126,12 +131,24 @@ describe('seedIfEmpty', () => {
   });
 
   it('skips without writing when the table already has rows', async () => {
-    const { client, createMany } = statefulClient(5);
+    const { client, createMany, executeRaw } = statefulClient(5);
 
     const result = await seedIfEmpty(client);
 
     expect(result).toEqual({ seeded: 0, skipped: true });
     expect(createMany).not.toHaveBeenCalled();
+    expect(executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('moves trade_id_seq past the seeded codes after inserting', async () => {
+    const { client, createMany, executeRaw } = statefulClient(0);
+
+    await seedIfEmpty(client);
+
+    expect(executeRaw).toHaveBeenCalledExactlyOnceWith(SYNC_TRADE_ID_SEQUENCE_SQL);
+    expect(createMany.mock.invocationCallOrder[0]).toBeLessThan(
+      executeRaw.mock.invocationCallOrder[0],
+    );
   });
 
   it('skips when the table has exactly one row', async () => {
@@ -172,6 +189,7 @@ describe('seedIfEmpty', () => {
           throw new Error('db down');
         },
       },
+      $executeRawUnsafe: async () => 0,
     };
 
     await expect(seedIfEmpty(client)).rejects.toThrow('db down');
@@ -194,6 +212,19 @@ describe('against real Postgres', () => {
     for (const row of stored) {
       expect(Number(row.price)).toBe(byId.get(row.tradeId)?.price);
     }
+  });
+
+  // Codes are TEST-SEED-<n> here, so this checks the SQL runs and ignores rows
+  // that don't match TRD-<n>, without disturbing the dev sequence.
+  it('the sequence sync SQL never moves the sequence backwards', async () => {
+    const [{ before }] = await prisma.$queryRaw<[{ before: bigint }]>`
+      SELECT last_value AS before FROM trade_id_seq`;
+
+    await prisma.$executeRawUnsafe(SYNC_TRADE_ID_SEQUENCE_SQL);
+
+    const [{ after }] = await prisma.$queryRaw<[{ after: bigint }]>`
+      SELECT last_value AS after FROM trade_id_seq`;
+    expect(after).toBeGreaterThanOrEqual(before);
   });
 
   it('leaves a non-empty table untouched', async () => {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { z } from 'zod';
+import { Prisma } from '../../generated/prisma/client.ts';
 import { createApp } from '../../src/app.js';
 import { AppError, ConflictError, NotFoundError, ValidationError } from '../../src/lib/errors.js';
 import { logger } from '../../src/lib/logger.js';
@@ -151,6 +152,33 @@ describe('errorHandler: AppError subclasses -> own status and code', () => {
     const res = await request(appThrowing(new NotFoundError('gone'))).get('/boom');
 
     expect(res.body.error).not.toHaveProperty('fields');
+  });
+});
+
+describe('errorHandler: Prisma unique-constraint violation -> 409 CONFLICT', () => {
+  const prismaError = (code: string) =>
+    new Prisma.PrismaClientKnownRequestError('Unique constraint failed on tradeId', {
+      code,
+      clientVersion: Prisma.prismaVersion.client,
+    });
+
+  it('maps P2002 to a 409 envelope without leaking the Prisma message', async () => {
+    const res = await request(appThrowing(prismaError('P2002'))).get('/boom');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: { code: 'CONFLICT', message: 'A trade with the same unique value already exists' },
+    });
+    expect(res.text).not.toContain('tradeId');
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it('still treats other Prisma errors as a logged 500', async () => {
+    const res = await request(appThrowing(prismaError('P2025'))).get('/boom');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual(INTERNAL_BODY);
+    expect(logError).toHaveBeenCalledTimes(1);
   });
 });
 

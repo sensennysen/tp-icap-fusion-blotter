@@ -29,22 +29,24 @@ export class TradeService {
     return trade;
   }
 
+  // The repository writes only to ACTIVE trades, so a null result means the
+  // trade is missing (404) or already cancelled (409).
   async amend(id: string, input: AmendTradeInput) {
-    const existing = await this.getById(id);
-    if (existing.status === 'CANCELLED') {
+    const trade = await tradeRepository.update(id, input);
+    if (!trade) {
+      await this.getById(id);
       throw new ConflictError(`Trade ${id} is cancelled and cannot be amended`);
     }
-    const trade = await tradeRepository.update(id, input);
     this.broadcaster.broadcast({ type: 'TRADE_AMENDED', payload: trade });
     return trade;
   }
 
   async cancel(id: string) {
-    const existing = await this.getById(id);
-    if (existing.status === 'CANCELLED') {
+    const trade = await tradeRepository.cancel(id);
+    if (!trade) {
+      await this.getById(id);
       throw new ConflictError(`Trade ${id} is already cancelled`);
     }
-    const trade = await tradeRepository.cancel(id);
     this.broadcaster.broadcast({ type: 'TRADE_CANCELLED', payload: trade });
     return trade;
   }

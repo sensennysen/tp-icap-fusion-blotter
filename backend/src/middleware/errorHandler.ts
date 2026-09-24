@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
+import { Prisma } from '../../generated/prisma/client.ts';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 
@@ -40,6 +41,15 @@ export function errorHandler(
         message: err.message,
         ...(err.fields ? { fields: err.fields } : {}),
       },
+    });
+    return;
+  }
+
+  // A unique-constraint clash (e.g. a duplicate tradeId) is a conflict the
+  // client can retry, not a server fault.
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+    res.status(409).json({
+      error: { code: 'CONFLICT', message: 'A trade with the same unique value already exists' },
     });
     return;
   }

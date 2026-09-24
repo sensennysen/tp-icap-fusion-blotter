@@ -5,8 +5,8 @@ export default defineConfig({
     environment: 'node',
     include: ['test/**/*.test.ts'],
     setupFiles: ['./test/setup.ts'],
-    // DB-backed suites share one Postgres (and trade ids are count-derived, so
-    // concurrent creates could collide) — run files serially so they can't race.
+    // DB-backed suites share one Postgres and assert on row counts, so run
+    // files serially to keep one file's rows out of another's assertions.
     fileParallelism: false,
   },
 });

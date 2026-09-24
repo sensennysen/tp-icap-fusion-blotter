@@ -62,6 +62,16 @@ describe('POST /api/trades', () => {
     expect(res.body.error.fields).toEqual({ quantity: 'quantity must be positive' });
     expect(await prisma.trade.count()).toBe(before);
   });
+
+  it('gives concurrent creates distinct tradeIds, all 201', async () => {
+    const responses = await Promise.all(
+      Array.from({ length: 10 }, () => request(app).post('/api/trades').send(samplePayload)),
+    );
+    for (const res of responses) if (res.body.data?.id) created.push(res.body.data.id);
+
+    expect(responses.map((r) => r.status)).toEqual(Array(10).fill(201));
+    expect(new Set(responses.map((r) => r.body.data.tradeId)).size).toBe(10);
+  });
 });
 
 describe('GET /api/trades', () => {

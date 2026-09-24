@@ -60,9 +60,11 @@ export const tradeRepository = {
     return row ? toTrade(row) : null;
   },
 
+  // nextval() is atomic, so concurrent creates never share a number (a
+  // count()-based code could). Numbers skipped by failed inserts are not reused.
   async nextTradeId(): Promise<string> {
-    const count = await prisma.trade.count();
-    return `TRD-${100001 + count}`;
+    const [{ n }] = await prisma.$queryRaw<[{ n: bigint }]>`SELECT nextval('trade_id_seq') AS n`;
+    return `TRD-${n}`;
   },
 
   async create(data: CreateTradeRecord): Promise<Trade> {
@@ -70,13 +72,23 @@ export const tradeRepository = {
     return toTrade(row);
   },
 
-  async update(id: string, data: UpdateTradeRecord): Promise<Trade> {
-    const row = await prisma.trade.update({ where: { id }, data });
-    return toTrade(row);
+  // update and cancel only match ACTIVE rows, so the status check and the write
+  // are one statement: a concurrent cancel can't slip in between them. They
+  // return null when the trade is missing or already cancelled; the service
+  // tells those apart.
+  async update(id: string, data: UpdateTradeRecord): Promise<Trade | null> {
+    const [row] = await prisma.trade.updateManyAndReturn({
+      where: { id, status: 'ACTIVE' },
+      data,
+    });
+    return row ? toTrade(row) : null;
   },
 
-  async cancel(id: string): Promise<Trade> {
-    const row = await prisma.trade.update({ where: { id }, data: { status: 'CANCELLED' } });
-    return toTrade(row);
+  async cancel(id: string): Promise<Trade | null> {
+    const [row] = await prisma.trade.updateManyAndReturn({
+      where: { id, status: 'ACTIVE' },
+      data: { status: 'CANCELLED' },
+    });
+    return row ? toTrade(row) : null;
   },
 };

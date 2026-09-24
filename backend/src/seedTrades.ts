@@ -51,7 +51,16 @@ export interface SeedClient {
     count(): Promise<number>;
     createMany(args: { data: ReturnType<typeof generateTrades> }): Promise<unknown>;
   };
+  $executeRawUnsafe(query: string): Promise<number>;
 }
+
+// The seed writes TRD-<n> codes itself, so move trade_id_seq past them or the
+// first API create would be issued TRD-100001 again. GREATEST keeps it from
+// ever moving backwards, which would re-issue codes of deleted trades.
+export const SYNC_TRADE_ID_SEQUENCE_SQL = `SELECT setval('trade_id_seq', GREATEST(
+  (SELECT last_value FROM trade_id_seq),
+  (SELECT COALESCE(MAX(substring("tradeId" FROM 5)::bigint), 100000) FROM "trades" WHERE "tradeId" ~ '^TRD-[0-9]+$')
+))`;
 
 export async function seedIfEmpty(client: SeedClient, count = DEFAULT_SEED_COUNT) {
   const existingCount = await client.trade.count();
@@ -61,6 +70,7 @@ export async function seedIfEmpty(client: SeedClient, count = DEFAULT_SEED_COUNT
   }
 
   await client.trade.createMany({ data: generateTrades(count) });
+  await client.$executeRawUnsafe(SYNC_TRADE_ID_SEQUENCE_SQL);
   logger.info({ total: count }, 'Seeded trades');
   return { seeded: count, skipped: false };
 }
