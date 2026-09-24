@@ -193,12 +193,23 @@ describe('tradeRepository.create', () => {
   });
 });
 
+// update/cancel write their trade_audit rows in the same transaction. Rows are
+// removed with their trade by the FK's ON DELETE CASCADE, so cleanup() covers them.
+const CHANGED_BY = 'repo-test-user';
+
+const auditsFor = (tradeId: string) =>
+  prisma.tradeAudit.findMany({ where: { tradeId }, orderBy: { changedAt: 'asc' } });
+
 describe('tradeRepository.update', () => {
   it('changes only the given fields and advances updatedAt', async () => {
     const created = await tradeRepository.create(baseRecord('UPD'));
     await sleep(5);
 
-    const updated = await tradeRepository.update(created.id, { quantity: 250, price: 190.25 });
+    const updated = await tradeRepository.update(
+      created.id,
+      { quantity: 250, price: 190.25 },
+      CHANGED_BY,
+    );
     if (!updated) throw new Error('expected the update to apply');
 
     expect(updated).toEqual({
@@ -211,23 +222,96 @@ describe('tradeRepository.update', () => {
     expect(await tradeRepository.findById(created.id)).toEqual(updated);
   });
 
-  it('returns null for an unknown id (the service owns the 404)', async () => {
-    expect(await tradeRepository.update('does-not-exist', { quantity: 1 })).toBeNull();
+  it('records exactly one audit row with from/to for each changed field', async () => {
+    const created = await tradeRepository.create(baseRecord('UPD-AUD'));
+
+    await tradeRepository.update(created.id, { quantity: 250, price: 190.25 }, CHANGED_BY);
+
+    const audits = await auditsFor(created.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      changedBy: CHANGED_BY,
+      changedFields: {
+        quantity: { from: 100, to: 250 },
+        price: { from: 189.5, to: 190.25 },
+      },
+    });
+    expect(audits[0].changedAt).toBeInstanceOf(Date);
   });
 
-  it('returns null and changes nothing for a cancelled trade', async () => {
+  it('leaves fields sent with their current value out of changedFields', async () => {
+    const created = await tradeRepository.create(baseRecord('UPD-SAME'));
+
+    await tradeRepository.update(created.id, { symbol: 'AAPL', quantity: 300 }, CHANGED_BY);
+
+    const [audit] = await auditsFor(created.id);
+    expect(audit.changedFields).toEqual({ quantity: { from: 100, to: 300 } });
+  });
+
+  it('still records one row, with no changed fields, for a no-op amend', async () => {
+    const created = await tradeRepository.create(baseRecord('UPD-NOOP'));
+
+    await tradeRepository.update(created.id, { quantity: 100 }, CHANGED_BY);
+
+    const audits = await auditsFor(created.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0].changedFields).toEqual({});
+  });
+
+  it('records one row per successive amend, each diffed against the previous state', async () => {
+    const created = await tradeRepository.create(baseRecord('UPD-SEQ'));
+
+    await tradeRepository.update(created.id, { quantity: 200 }, CHANGED_BY);
+    await tradeRepository.update(created.id, { quantity: 300 }, CHANGED_BY);
+
+    const audits = await auditsFor(created.id);
+    expect(audits.map((a) => a.changedFields)).toEqual([
+      { quantity: { from: 100, to: 200 } },
+      { quantity: { from: 200, to: 300 } },
+    ]);
+  });
+
+  // The row lock is what makes each diff's "from" exact: without it, concurrent
+  // amends all read the same before-state. Asserted as a chain (each from is
+  // exactly one other row's to) so it doesn't depend on changedAt ordering.
+  it('diffs concurrent amends against each other, forming one unbroken chain', async () => {
+    const created = await tradeRepository.create(baseRecord('UPD-CONC'));
+    const quantities = [201, 202, 203, 204, 205, 206, 207, 208];
+
+    await Promise.all(
+      quantities.map((quantity) => tradeRepository.update(created.id, { quantity }, CHANGED_BY)),
+    );
+
+    const changes = (await auditsFor(created.id)).map(
+      (a) => (a.changedFields as { quantity: { from: number; to: number } }).quantity,
+    );
+    const stored = await tradeRepository.findById(created.id);
+    expect(changes).toHaveLength(quantities.length);
+    expect(changes.map((c) => c.to).sort()).toEqual(quantities);
+    // Every value except the final stored one was the "from" of exactly one amend.
+    expect(changes.map((c) => c.from).sort()).toEqual(
+      [100, ...quantities.filter((q) => q !== stored?.quantity)].sort(),
+    );
+  });
+
+  it('returns null for an unknown id (the service owns the 404)', async () => {
+    expect(await tradeRepository.update('does-not-exist', { quantity: 1 }, CHANGED_BY)).toBeNull();
+  });
+
+  it('returns null, changes nothing and records no audit row for a cancelled trade', async () => {
     const { id } = await seed('UPD-CXL', { status: 'CANCELLED' });
 
-    expect(await tradeRepository.update(id, { quantity: 999 })).toBeNull();
+    expect(await tradeRepository.update(id, { quantity: 999 }, CHANGED_BY)).toBeNull();
     expect((await tradeRepository.findById(id))?.quantity).toBe(100);
+    expect(await auditsFor(id)).toHaveLength(0);
   });
 
   it('does not amend a trade cancelled concurrently', async () => {
     const created = await tradeRepository.create(baseRecord('UPD-RACE'));
 
     const [updated, cancelled] = await Promise.all([
-      tradeRepository.update(created.id, { quantity: 999 }),
-      tradeRepository.cancel(created.id),
+      tradeRepository.update(created.id, { quantity: 999 }, CHANGED_BY),
+      tradeRepository.cancel(created.id, CHANGED_BY),
     ]);
 
     // Either order is fine, but an amend must never land on a cancelled row.
@@ -240,6 +324,8 @@ describe('tradeRepository.update', () => {
     } else {
       expect(stored?.quantity).toBe(100);
     }
+    // One audit row per write that actually landed.
+    expect(await auditsFor(created.id)).toHaveLength(updated ? 2 : 1);
   });
 });
 
@@ -247,31 +333,46 @@ describe('tradeRepository.cancel', () => {
   it('sets status to CANCELLED and persists it', async () => {
     const created = await tradeRepository.create(baseRecord('CXL'));
 
-    const cancelled = await tradeRepository.cancel(created.id);
+    const cancelled = await tradeRepository.cancel(created.id, CHANGED_BY);
 
     expect(cancelled?.status).toBe('CANCELLED');
     expect((await tradeRepository.findById(created.id))?.status).toBe('CANCELLED');
   });
 
-  it('returns null for a second cancel (the service owns the 409)', async () => {
-    const created = await tradeRepository.create(baseRecord('CXL2'));
-    await tradeRepository.cancel(created.id);
+  it('records exactly one audit row for the status transition', async () => {
+    const created = await tradeRepository.create(baseRecord('CXL-AUD'));
 
-    expect(await tradeRepository.cancel(created.id)).toBeNull();
+    await tradeRepository.cancel(created.id, CHANGED_BY);
+
+    const audits = await auditsFor(created.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      changedBy: CHANGED_BY,
+      changedFields: { status: { from: 'ACTIVE', to: 'CANCELLED' } },
+    });
+  });
+
+  it('returns null and records no second audit row for a second cancel', async () => {
+    const created = await tradeRepository.create(baseRecord('CXL2'));
+    await tradeRepository.cancel(created.id, CHANGED_BY);
+
+    expect(await tradeRepository.cancel(created.id, CHANGED_BY)).toBeNull();
+    expect(await auditsFor(created.id)).toHaveLength(1);
   });
 
   it('returns null for an unknown id', async () => {
-    expect(await tradeRepository.cancel('does-not-exist')).toBeNull();
+    expect(await tradeRepository.cancel('does-not-exist', CHANGED_BY)).toBeNull();
   });
 
-  it('lets exactly one of several concurrent cancels win', async () => {
+  it('lets exactly one of several concurrent cancels win, with one audit row', async () => {
     const created = await tradeRepository.create(baseRecord('CXL-RACE'));
 
     const results = await Promise.all(
-      Array.from({ length: 10 }, () => tradeRepository.cancel(created.id)),
+      Array.from({ length: 10 }, () => tradeRepository.cancel(created.id, CHANGED_BY)),
     );
 
     expect(results.filter((r) => r !== null)).toHaveLength(1);
+    expect(await auditsFor(created.id)).toHaveLength(1);
   });
 });
 

@@ -16,8 +16,12 @@ DB behaviour belongs in `test/repositories/`, HTTP mapping in `test/routes/`, re
   `instanceof`, since those are what `errorHandler` maps to the HTTP response.
 - Cover "repository rejects -> no broadcast" for every mutation: a broadcast must never precede or
   survive a failed write.
-- The repository throws raw Prisma errors (`P2025`) on unknown ids, so the service's lookup-first
-  ordering is what produces the 404. Test that `amend`/`cancel` on a missing id never reach the writer.
+- `amend`/`cancel` are write-first: the repository's guarded write returns `null` for a missing or
+  already-cancelled trade, and only then does the service look the trade up to choose 404 vs 409.
+  Test both `null` branches, and that the success path never calls `findById`.
+- When a mutation also records an audit row, assert the audit attribution argument (`changedBy`) on
+  the repository call. The audit row itself is written in the repository's transaction, so test its
+  count and diff in `test/repositories/`, not here.
 - Check-then-act races cannot be expressed against a mocked repository. Record them as `it.todo` with
   the fix location in a comment, rather than a test that passes for the wrong reason.
 - Mutation-check before calling it done: remove each guard, each broadcast, swap event types, skip the

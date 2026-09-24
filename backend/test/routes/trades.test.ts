@@ -198,3 +198,49 @@ describe('POST /api/trades/:id/cancel', () => {
     expect(res.body.error.code).toBe('NOT_FOUND');
   });
 });
+
+describe('GET /api/trades/:id/audit', () => {
+  it('returns an empty history for a trade that has not been changed', async () => {
+    const trade = await createTrade();
+
+    const res = await request(app).get(`/api/trades/${trade.id}/audit`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('returns one entry per amend/cancel, oldest first, excluding rejected writes', async () => {
+    const trade = await createTrade();
+    await request(app).patch(`/api/trades/${trade.id}`).send({ quantity: 250 }).expect(200);
+    await request(app).post(`/api/trades/${trade.id}/cancel`).expect(200);
+    await request(app).post(`/api/trades/${trade.id}/cancel`).expect(409);
+    await request(app).patch(`/api/trades/${trade.id}`).send({ quantity: 300 }).expect(409);
+
+    const res = await request(app).get(`/api/trades/${trade.id}/audit`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([
+      {
+        id: expect.any(String),
+        tradeId: trade.id,
+        changedFields: { quantity: { from: 100, to: 250 } },
+        changedAt: expect.any(String),
+        changedBy: 'system',
+      },
+      {
+        id: expect.any(String),
+        tradeId: trade.id,
+        changedFields: { status: { from: 'ACTIVE', to: 'CANCELLED' } },
+        changedAt: expect.any(String),
+        changedBy: 'system',
+      },
+    ]);
+  });
+
+  it('returns 404 for a missing trade', async () => {
+    const res = await request(app).get('/api/trades/does-not-exist/audit');
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+});

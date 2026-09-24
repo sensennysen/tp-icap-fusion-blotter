@@ -30,3 +30,17 @@ export interface TradeListQuery {
   sort?: TradeSortField;
   order?: SortOrder;
 }
+
+// Audited Trade fields are all strings or numbers (price is already a number).
+export type FieldChange = {
+  from: string | number;
+  to: string | number;
+};
+
+export interface TradeAuditEntry {
+  id: string;
+  tradeId: string;
+  changedFields: Record<string, FieldChange>;
+  changedAt: string;
+  changedBy: string;
+}

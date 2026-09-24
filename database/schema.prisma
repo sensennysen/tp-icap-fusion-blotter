@@ -18,23 +18,39 @@ enum TradeStatus {
 }
 
 model Trade {
-  id             String      @id @default(cuid())
-  tradeId        String      @unique
+  id             String       @id @default(cuid())
+  tradeId        String       @unique
   symbol         String
   side           Side
   quantity       Int
-  price          Decimal     @db.Decimal(12, 4)
+  price          Decimal      @db.Decimal(12, 4)
   trader         String
   book           String
   counterparty   String
-  tradeTimestamp DateTime    @default(now())
-  status         TradeStatus @default(ACTIVE)
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  tradeTimestamp DateTime     @default(now())
+  status         TradeStatus  @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  audits         TradeAudit[]
 
   @@index([symbol])
   @@index([trader])
   @@index([status])
   @@index([tradeTimestamp])
   @@map("trades")
+}
+
+// One row per amend/cancel, written in the same transaction as the trade
+// change. tradeId references Trade.id (the cuid PK), not the TRD-n code.
+// Cascade only matters to test cleanup: the app never deletes trades.
+model TradeAudit {
+  id            String   @id @default(cuid())
+  tradeId       String
+  trade         Trade    @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  changedFields Json
+  changedAt     DateTime @default(now())
+  changedBy     String
+
+  @@index([tradeId, changedAt])
+  @@map("trade_audit")
 }

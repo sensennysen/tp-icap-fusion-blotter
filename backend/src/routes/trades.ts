@@ -24,6 +24,15 @@ export function createTradesRouter(tradeService: TradeService): Router {
     }
   });
 
+  router.get('/trades/:id/audit', async (req, res, next) => {
+    try {
+      const entries = await tradeService.getAuditHistory(req.params.id);
+      res.json({ data: entries });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.post('/trades', async (req, res, next) => {
     try {
       const input = createTradeSchema.parse(req.body);

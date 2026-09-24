@@ -38,8 +38,13 @@ vi.mock('../src/repositories/tradeRepository.js', () => ({
   },
 }));
 
+vi.mock('../src/repositories/tradeAuditRepository.js', () => ({
+  tradeAuditRepository: { listByTradeId: vi.fn() },
+}));
+
 const { tradeRepository } = await import('../src/repositories/tradeRepository.js');
-const { TradeService } = await import('../src/services/tradeService.js');
+const { tradeAuditRepository } = await import('../src/repositories/tradeAuditRepository.js');
+const { TradeService, AUDIT_CHANGED_BY } = await import('../src/services/tradeService.js');
 const { ConflictError, NotFoundError } = await import('../src/lib/errors.js');
 
 describe('TradeService', () => {
@@ -125,7 +130,11 @@ describe('TradeService', () => {
       const result = await service.amend('trade-1', { quantity: 250 });
 
       expect(result).toEqual(amended);
-      expect(tradeRepository.update).toHaveBeenCalledExactlyOnceWith('trade-1', { quantity: 250 });
+      expect(tradeRepository.update).toHaveBeenCalledExactlyOnceWith(
+        'trade-1',
+        { quantity: 250 },
+        AUDIT_CHANGED_BY,
+      );
       expect(tradeRepository.findById).not.toHaveBeenCalled();
       expect(broadcast).toHaveBeenCalledTimes(1);
       expect(broadcast).toHaveBeenCalledWith({ type: 'TRADE_AMENDED', payload: amended });
@@ -170,7 +179,7 @@ describe('TradeService', () => {
       const result = await service.cancel('trade-1');
 
       expect(result.status).toBe('CANCELLED');
-      expect(tradeRepository.cancel).toHaveBeenCalledExactlyOnceWith('trade-1');
+      expect(tradeRepository.cancel).toHaveBeenCalledExactlyOnceWith('trade-1', AUDIT_CHANGED_BY);
       expect(tradeRepository.findById).not.toHaveBeenCalled();
       expect(broadcast).toHaveBeenCalledTimes(1);
       expect(broadcast).toHaveBeenCalledWith({ type: 'TRADE_CANCELLED', payload: cancelled });
@@ -214,6 +223,42 @@ describe('TradeService', () => {
 
       expect(tradeRepository.cancel).toHaveBeenCalledTimes(2);
       expect(broadcast).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('audit attribution', () => {
+    // No auth exists yet (TASK-002), so changedBy is a fixed placeholder.
+    it('attributes audit rows to the "system" placeholder until auth lands', () => {
+      expect(AUDIT_CHANGED_BY).toBe('system');
+    });
+  });
+
+  describe('getAuditHistory', () => {
+    it('returns the audit entries for an existing trade', async () => {
+      const entries = [
+        {
+          id: 'audit-1',
+          tradeId: 'trade-1',
+          changedFields: { quantity: { from: 100, to: 250 } },
+          changedAt: new Date().toISOString(),
+          changedBy: 'system',
+        },
+      ];
+      vi.mocked(tradeRepository.findById).mockResolvedValue(baseTrade);
+      vi.mocked(tradeAuditRepository.listByTradeId).mockResolvedValue(entries);
+
+      expect(await service.getAuditHistory('trade-1')).toEqual(entries);
+      expect(tradeAuditRepository.listByTradeId).toHaveBeenCalledExactlyOnceWith('trade-1');
+    });
+
+    it('throws NotFoundError (404) for a missing trade without reading audit rows', async () => {
+      vi.mocked(tradeRepository.findById).mockResolvedValue(null);
+
+      const err = await service.getAuditHistory('missing').catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(NotFoundError);
+      expect(err).toMatchObject({ statusCode: 404, code: 'NOT_FOUND' });
+      expect(tradeAuditRepository.listByTradeId).not.toHaveBeenCalled();
     });
   });
 });
