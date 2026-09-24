@@ -21,7 +21,9 @@ const baseRecord = (suffix: string) => ({
   counterparty: 'GOLDMAN',
 });
 
-type SeedOverrides = Partial<ReturnType<typeof baseRecord>> & {
+// baseRecord's side is the literal 'BUY', so widen it for SELL overrides.
+type SeedOverrides = Partial<Omit<ReturnType<typeof baseRecord>, 'side'>> & {
+  side?: 'BUY' | 'SELL';
   status?: 'ACTIVE' | 'CANCELLED';
   tradeTimestamp?: Date;
 };
