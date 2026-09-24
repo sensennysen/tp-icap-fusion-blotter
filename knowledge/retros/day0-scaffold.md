@@ -965,3 +965,45 @@ typecheck`, exits 1 with `TS2307: Cannot find module '../../generated/prisma/cli
       local variable passed `pnpm lint` with exit 0. The repo has 0 warnings today, so adding
       `--max-warnings 0` to each workspace's `lint` script is cheap. It is a policy change
       (someone chose `warn`), so it was left for an explicit decision.
+
+## Found by `/evaluate` + `/plan` + `/apply` on BONUS TASK-001 (2026-09-24)
+
+163.  **Prisma's generated migration timestamp can sort before hand-named migrations.**
+      `migrate dev --create-only` named the audit migration `20260924031417_…`, which sorts
+      _before_ the hand-named `20260924120000_add_trade_id_sequence`. I renamed it to
+      `20260924130000_add_trade_audit`. After `--create-only`, `ls database/migrations` and
+      check that the new folder sorts last.
+164.  **The graphify `PostToolUse` hook runs `graphify update .` in the shell's current
+      directory.** A `cd database/migrations` left a `graphify-out/` folder there. Prisma treats
+      every folder in `migrations/` as a migration, so `migrate deploy` failed with P3015, after
+      it had already applied the real migration. Keep the shell at the repo root. Stray
+      gitignored `graphify-out/` folders from earlier sessions also sit in `backend/` and
+      `backend/test/realtime/`.
+165.  **A shared type written to a Prisma `Json` column must be JSON-shaped.** With `from: unknown`,
+      `FieldChange` would not assign to `InputJsonObject` (TS2352). A `type` alias (not an
+      `interface`) with concrete `string | number` members assigns without a cast.
+
+## Found by `/validate` on BONUS TASK-001 (2026-09-24)
+
+166.  **FIX NOW, fixed: nothing proved the `SELECT … FOR UPDATE` row lock.** With the lock query
+      deleted, all 64 repository and route tests still passed. I added "diffs concurrent amends
+      against each other, forming one unbroken chain": 8 concurrent amends, and every value
+      except the stored one must be the `from` of exactly one audit row. The lock mutant now
+      fails it (the rows show `from: 201` more than once). It passed 5/5 runs with the lock in place.
+167.  **`changedAt` is stamped by Prisma at insert time, not by the column's
+      `DEFAULT CURRENT_TIMESTAMP`.** A probe that inserted 500 ms into an interactive transaction
+      got `changedAt` about 509 ms after the transaction began. So audit order follows lock/commit
+      order. A raw-SQL insert would get the transaction _start_ time instead.
+168.  **BACKLOG: same-millisecond ties in audit ordering.** `listByTradeId` orders by
+      `(changedAt, id)`. Two locked writes to one trade in the same millisecond fall back to cuid
+      order, which is not strictly monotonic. A `bigserial` sequence column would give a total
+      order if exact ordering ever matters.
+169.  **BACKLOG: lock waiters hold pool connections.** Each amend/cancel is now an interactive
+      transaction that holds a pg connection while waiting on the row lock. The pool defaults to
+      10, and Prisma's interactive transactions default to `maxWait` 2 s and `timeout` 5 s. A
+      burst of more than ~10 concurrent writes to one hot trade could return P2028. That is fine
+      at take-home scale; revisit if this ever takes real load.
+170.  **BACKLOG: `changedBy` is the `"system"` placeholder** (`AUDIT_CHANGED_BY` in
+      `tradeService.ts`) until bonus TASK-002 (mock auth) supplies a user.
+171.  **BACKLOG: no frontend view of audit history.** `GET /api/trades/:id/audit` exists, but the
+      blotter UI does not call it yet.

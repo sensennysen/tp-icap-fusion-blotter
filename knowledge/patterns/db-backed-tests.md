@@ -11,3 +11,8 @@ For tests that hit the real Postgres (`backend/test/db/`, `backend/test/reposito
 - Never assert absolute counts or sequence values; assert relative change (`before + 1`).
 - Mutation-check: break the code under test, confirm the tests fail, revert.
 - `backend/tsconfig.json` does not type-check `test/` — rely on ESLint + vitest (retro item 17).
+- Tables with an FK to `trades` (e.g. `trade_audit`) use `ON DELETE CASCADE`, so the prefix-scoped
+  `trade.deleteMany` cleanup also removes their rows. Don't add a separate cleanup for them.
+- To prove a row lock or transaction, fire N concurrent writes at one row and assert an
+  order-independent invariant over the results (e.g. the audit `from` values form one chain).
+  Then delete the lock and confirm the test fails. Sequential tests can't tell a lock is missing.
