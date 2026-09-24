@@ -39,3 +39,30 @@ rather than calling `useTrades` itself.
   action's callback, the `useMemo` deps, the loading/empty branches, the timestamp format and
   `getRowId`. `sortFn: 'datetime'` is an equivalent mutant: the auto `alphanumeric` sort orders
   `toISOString` strings the same way.
+
+## Virtualized path (bonus TASK-003)
+
+Above `VIRTUALIZE_THRESHOLD` rows the grid windows its `<tbody>`. These tests live in their own
+top-level `describe('TradeGrid virtualization')` so the suite above stays unchanged.
+
+- jsdom has no layout. virtual-core measures both the scroll element and each rendered row
+  (`measureElement`) with `offsetHeight`, which is 0 in jsdom, and skips observing because
+  there's no `ResizeObserver`. Stub `HTMLElement.prototype.offsetHeight` in `beforeEach` so
+  `<tr>` returns a row height and everything else returns the viewport height. Restore the saved
+  descriptor in `afterEach`. Without the stub the virtualized grid renders no rows. With a single
+  value for every element, each row measures viewport-tall.
+- Prove rows are measured, not assumed: render the same data with the stubbed row height at the
+  estimate and at a larger (wrapped) height. The larger one renders fewer rows and a total height
+  above `n × estimate`. A fixed-height check in the real browser is what caught the missing
+  measurement: real rows wrap to ~57px.
+- Import `VIRTUALIZE_THRESHOLD` and test the boundary: exactly the threshold renders every row
+  with no spacers, and threshold + 1 renders a window. This catches `>` vs `>=` and inverted
+  comparisons.
+- Build the bulk fixture so the default order (timestamp) and a sort column (quantity, a
+  permutation `(i * 7919) % n + 1`) disagree. Then asserting the top values after a sort proves
+  it sorted the whole dataset, not the rendered slice.
+- Scroll by defining `scrollTop` on the container instance, then `fireEvent.scroll`. Check the
+  expected row is present and the first row is gone, and that
+  `top spacer + rendered × ROW_PX + bottom spacer = n × ROW_PX`.
+- Spacer rows are `aria-hidden`, so `getAllByRole('row')` skips them. Reach them by
+  `data-testid` and assert their `colspan` equals the header count, with and without `readOnly`.

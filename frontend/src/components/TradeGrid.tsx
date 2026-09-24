@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   createColumnHelper,
   createSortedRowModel,
@@ -7,8 +7,10 @@ import {
   sortFns,
   tableFeatures,
   useTable,
+  type Row,
   type SortingState,
 } from '@tanstack/react-table';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Trade } from '@fusion-blotter/shared';
 
 interface TradeGridProps {
@@ -37,6 +39,13 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
 });
 
 const EMPTY_TRADES: Trade[] = [];
+
+// Above this many rows only the visible window is rendered. Below it every row is in the DOM:
+// small blotters render fine without virtualization (ADR-004), and nothing scrolls internally.
+export const VIRTUALIZE_THRESHOLD = 200;
+// A single-line row (py-2 cells + text-sm). Only a first guess: Trade ID, Book and Timestamp wrap
+// at common widths, so rendered rows are measured and the real height replaces this.
+const ESTIMATED_ROW_PX = 37;
 
 export function TradeGrid({
   trades,
@@ -128,6 +137,18 @@ export function TradeGrid({
     enableMultiSort: false,
   });
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rows = table.getRowModel().rows;
+  const virtualize = rows.length > VIRTUALIZE_THRESHOLD;
+  // Hooks can't be conditional, so the virtualizer always exists and is disabled below the threshold.
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ESTIMATED_ROW_PX,
+    overscan: 10,
+    enabled: virtualize,
+  });
+
   if (isLoading) {
     return <p className="p-4 text-sm text-slate-500">Loading trades…</p>;
   }
@@ -136,9 +157,46 @@ export function TradeGrid({
     return <p className="p-4 text-sm text-slate-500">No trades match the current filters.</p>;
   }
 
-  return (
+  // `virtualIndex` is set only in the virtualized path, where the virtualizer measures the row.
+  const renderRow = (row: Row<typeof features, Trade>, virtualIndex?: number) => {
+    const trade = row.original;
+    return (
+      <tr
+        key={row.id}
+        ref={virtualIndex === undefined ? undefined : virtualizer.measureElement}
+        data-index={virtualIndex}
+        className={`border-b border-slate-100 ${trade.status === 'CANCELLED' ? 'opacity-50' : ''}`}
+      >
+        {row.getAllCells().map((cell) => (
+          <td key={cell.id} className="px-3 py-2">
+            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          </td>
+        ))}
+      </tr>
+    );
+  };
+
+  // Spacer rows stand in for the off-screen rows, so the table keeps native column layout.
+  const renderVirtualRows = () => {
+    const items = virtualizer.getVirtualItems();
+    const paddingTop = items[0]?.start ?? 0;
+    const paddingBottom = virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0);
+    return (
+      <>
+        <tr aria-hidden="true" data-testid="virtual-spacer-top">
+          <td colSpan={columns.length} style={{ height: paddingTop, padding: 0 }} />
+        </tr>
+        {items.map((item) => renderRow(rows[item.index]!, item.index))}
+        <tr aria-hidden="true" data-testid="virtual-spacer-bottom">
+          <td colSpan={columns.length} style={{ height: paddingBottom, padding: 0 }} />
+        </tr>
+      </>
+    );
+  };
+
+  const tableElement = (
     <table className="w-full border-collapse text-left text-sm" aria-label="Trade blotter">
-      <thead>
+      <thead className={virtualize ? 'sticky top-0 z-10 bg-white' : undefined}>
         {table.getHeaderGroups().map((headerGroup) => (
           <tr key={headerGroup.id} className="border-b border-slate-200">
             {headerGroup.headers.map((header) => {
@@ -170,25 +228,15 @@ export function TradeGrid({
           </tr>
         ))}
       </thead>
-      <tbody>
-        {table.getRowModel().rows.map((row) => {
-          const trade = row.original;
-          return (
-            <tr
-              key={row.id}
-              className={`border-b border-slate-100 ${
-                trade.status === 'CANCELLED' ? 'opacity-50' : ''
-              }`}
-            >
-              {row.getAllCells().map((cell) => (
-                <td key={cell.id} className="px-3 py-2">
-                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                </td>
-              ))}
-            </tr>
-          );
-        })}
-      </tbody>
+      <tbody>{virtualize ? renderVirtualRows() : rows.map((row) => renderRow(row))}</tbody>
     </table>
+  );
+
+  if (!virtualize) return tableElement;
+
+  return (
+    <div ref={scrollRef} className="max-h-[70vh] overflow-auto">
+      {tableElement}
+    </div>
   );
 }

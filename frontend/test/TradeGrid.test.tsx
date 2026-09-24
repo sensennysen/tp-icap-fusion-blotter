@@ -1,8 +1,8 @@
 import type { ComponentProps } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { Trade } from '@fusion-blotter/shared';
-import { TradeGrid } from '../src/components/TradeGrid.js';
+import { TradeGrid, VIRTUALIZE_THRESHOLD } from '../src/components/TradeGrid.js';
 
 type GridProps = ComponentProps<typeof TradeGrid>;
 
@@ -424,5 +424,151 @@ describe('TradeGrid', () => {
       expect(header('Actions')).toBeInTheDocument();
       expect(within(rowOf(tradeB.tradeId)).getAllByRole('button')).toHaveLength(2);
     });
+  });
+});
+
+// jsdom has no layout, so every element measures 0px tall and a virtualizer would render nothing.
+// virtual-core reads both the viewport and each rendered row from `offsetHeight` (and skips
+// observing, since jsdom has no ResizeObserver), so the stub gives rows and the scroll container
+// their own heights. ROW_PX matches the grid's estimate; a test that changes rowPx proves rows are
+// measured rather than assumed.
+const VIEWPORT_PX = 600;
+const ROW_PX = 37;
+let rowPx = ROW_PX;
+
+// Trade i has timestamp order i (default sort puts i=count-1 first) and a quantity that is a
+// permutation of 1..count unrelated to that order, so a sort over the whole dataset is visible.
+const manyTrades = (count: number) =>
+  Array.from({ length: count }, (_, i) =>
+    makeTrade({
+      id: `bulk-${i}`,
+      tradeId: `TRD-${String(200000 + i)}`,
+      quantity: ((i * 7919) % count) + 1,
+      tradeTimestamp: new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString(),
+    }),
+  );
+
+const spacerHeight = (testId: string) =>
+  parseFloat(screen.getByTestId(testId).querySelector('td')!.style.height);
+
+describe('TradeGrid virtualization', () => {
+  let offsetHeight: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.tagName === 'TR' ? rowPx : VIEWPORT_PX;
+      },
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeight!);
+    rowPx = ROW_PX;
+  });
+
+  it('renders every row at the threshold, with no scroll container or spacers', () => {
+    renderGrid(manyTrades(VIRTUALIZE_THRESHOLD));
+    expect(bodyRows()).toHaveLength(VIRTUALIZE_THRESHOLD);
+    expect(screen.queryByTestId('virtual-spacer-top')).not.toBeInTheDocument();
+    expect(screen.getByRole('table').parentElement).not.toHaveClass('overflow-auto');
+  });
+
+  it('renders only a window of rows above the threshold', () => {
+    renderGrid(manyTrades(VIRTUALIZE_THRESHOLD + 1));
+    const rendered = bodyRows().length;
+    expect(rendered).toBeGreaterThan(0);
+    expect(rendered).toBeLessThan(VIRTUALIZE_THRESHOLD + 1);
+  });
+
+  it('windows 1,000 rows, with spacers standing in for the rest', () => {
+    renderGrid(manyTrades(1000));
+    const rendered = bodyRows().length;
+    // The viewport's rows plus overscan, not the whole dataset.
+    expect(rendered).toBeGreaterThanOrEqual(Math.ceil(VIEWPORT_PX / ROW_PX));
+    expect(rendered).toBeLessThan(50);
+    expect(rowIds()[0]).toBe('TRD-200999');
+    expect(spacerHeight('virtual-spacer-top')).toBe(0);
+    expect(spacerHeight('virtual-spacer-bottom')).toBe((1000 - rendered) * ROW_PX);
+    // Spacers are aria-hidden and span the full width, so the table's structure is unchanged.
+    expect(screen.getByTestId('virtual-spacer-top')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByTestId('virtual-spacer-top').querySelector('td')).toHaveAttribute(
+      'colspan',
+      String(screen.getAllByRole('columnheader').length),
+    );
+  });
+
+  it('scroll container scrolls vertically and keeps the header sticky', () => {
+    renderGrid(manyTrades(1000));
+    expect(screen.getByRole('table').parentElement).toHaveClass('overflow-auto', 'max-h-[70vh]');
+    expect(screen.getAllByRole('rowgroup')[0]).toHaveClass('sticky', 'top-0');
+  });
+
+  it('sorts the whole dataset, not just the rendered window', () => {
+    renderGrid(manyTrades(1000));
+    clickHeader('Quantity');
+    expectSortedBy('Quantity', 'descending');
+    expect(columnValues('Quantity').slice(0, 3)).toEqual(['1000', '999', '998']);
+    clickHeader('Quantity');
+    expect(columnValues('Quantity').slice(0, 3)).toEqual(['1', '2', '3']);
+  });
+
+  it('renders the rows at the scroll position after a scroll', () => {
+    renderGrid(manyTrades(1000));
+    const scroller = screen.getByRole('table').parentElement!;
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, value: 500 * ROW_PX });
+    fireEvent.scroll(scroller);
+
+    const ids = rowIds();
+    // Default sort is newest first, so row 500 is trade i=499.
+    expect(ids).toContain('TRD-200499');
+    expect(ids).not.toContain('TRD-200999');
+    const top = spacerHeight('virtual-spacer-top');
+    expect(top).toBeGreaterThan(0);
+    expect(top + ids.length * ROW_PX + spacerHeight('virtual-spacer-bottom')).toBe(1000 * ROW_PX);
+  });
+
+  it('keeps a live prepend sorted into place rather than on top', () => {
+    const trades = manyTrades(1000);
+    const { rerenderWith } = renderGrid(trades);
+    const backdated = makeTrade({
+      id: 'late',
+      tradeId: 'TRD-300000',
+      tradeTimestamp: '2025-06-01T00:00:00.000Z',
+    });
+    rerenderWith({ trades: [backdated, ...trades] });
+    expect(rowIds()[0]).toBe('TRD-200999');
+    expect(screen.queryByText('TRD-300000')).not.toBeInTheDocument();
+    expect(spacerHeight('virtual-spacer-bottom')).toBe((1001 - bodyRows().length) * ROW_PX);
+  });
+
+  it('sizes rendered rows by measurement, not the estimate', () => {
+    const windowAt = (px: number) => {
+      rowPx = px;
+      const { unmount } = renderGrid(manyTrades(1000));
+      const rendered = bodyRows().length;
+      const total =
+        spacerHeight('virtual-spacer-top') + rendered * px + spacerHeight('virtual-spacer-bottom');
+      unmount();
+      return { rendered, total };
+    };
+    const single = windowAt(ROW_PX);
+    // Wrapped rows (Trade ID, Book, Timestamp on two lines) are taller than the estimate: fewer
+    // of them fill the viewport, and the scrollable height grows past count × estimate.
+    const wrapped = windowAt(57);
+    expect(wrapped.rendered).toBeLessThan(single.rendered);
+    expect(single.total).toBe(1000 * ROW_PX);
+    expect(wrapped.total).toBeGreaterThan(1000 * ROW_PX);
+  });
+
+  it('virtualizes a read-only grid, with spacers spanning only its columns', () => {
+    renderGrid(manyTrades(1000), { readOnly: true });
+    expect(bodyRows().length).toBeLessThan(50);
+    expect(screen.getByTestId('virtual-spacer-bottom').querySelector('td')).toHaveAttribute(
+      'colspan',
+      '10',
+    );
   });
 });
