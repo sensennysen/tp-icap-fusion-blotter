@@ -719,3 +719,72 @@ src/server.ts"` does not match the tsx process (its argv is `… loader.mjs src/
       request then fails, the toast appears but the typed input is gone. Fix: ignore dismissal
       while `isSubmitting`, or disable Cancel and × and skip Escape while it is set. Low
       impact, because the user chose to close.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-017 (2026-09-24)
+
+126.  **`CancelTradeConfirm` copied `Modal`'s markup but none of its #121 fixes.** The title
+      id was hardcoded (`cancel-confirm-title`), Escape did nothing, and focus stayed on the
+      row's Cancel button behind the overlay. It now uses `useId()` for both the title and a
+      new `aria-describedby` description, closes on Escape (the listener is removed on
+      unmount), and focuses **Keep Trade** when it opens. WAI-ARIA says a destructive
+      alertdialog should focus its least destructive action, so a stray Enter keeps the trade.
+      `Modal.tsx` is unchanged. It is `role="dialog"` and has a × button, so reusing it would
+      have changed both trade forms.
+127.  **Dismissing while the cancel was pending closed the dialog early.** The toast then
+      appeared with no dialog on screen, which is #125 for this component. While the request
+      is pending, Keep Trade is disabled, Escape is ignored, and the confirm button reads
+      "Cancelling…". A ref mirrors `isSubmitting` so the one-time keydown listener sees the
+      current value.
+128.  **A rejected `onConfirm` leaked an unhandled rejection** from the click handler, because
+      the handler used `try/finally` with no `catch`. The page's handler never rejects today,
+      so this was latent. The component now catches and unlocks, and reporting stays with
+      the caller (the page toasts). This change went beyond the plan: the rejection test
+      found it.
+129.  **The page wiring was already correct and is now tested.** `TradeBlotterPage.test.tsx`
+      checks four things. A confirm sends exactly one `POST /trades/trade-1/cancel`, toasts
+      "Trade cancelled" and closes. A 500 or a 409 already-cancelled response toasts
+      "Failed to cancel trade" and **still closes** (TASK-017 AC, `finally`). Keep Trade
+      closes the dialog and sends no request.
+130.  **New tests:** 9 in `CancelTradeConfirm.test.tsx` (new) and 4 more in
+      `TradeBlotterPage.test.tsx` (now 8). 6 of the 9 component tests fail against the old
+      component. Mutation-checked with 14 mutants, all killed: 9 in the component (Escape
+      guard, ref set/reset, listener cleanup, initial focus, Keep disabled, catch,
+      describedby, pending label) and 5 on the page (drop the `finally` close, close only on
+      failure, wrong id, and each toast). Pattern in `knowledge/patterns/cancel-confirm-tests.md`.
+131.  **Still open, out of scope for TASK-017:**
+      - The dialog shows a snapshot of `trade`. If another client cancels the trade while the
+        dialog is open, the WebSocket update refreshes the grid but not the dialog, so
+        confirming gets a 409 and an error toast. The AC accepts this. A possible fix: the page
+        closes the dialog (with an info toast) when the cached row for `cancelTarget.id`
+        becomes `CANCELLED`.
+      - As with `Modal` (#123), there is no focus trap and focus isn't returned to the row's
+        Cancel button when the dialog closes.
+
+## Found by `/validate` on TASK-017 (2026-09-24)
+
+132.  **`/validate`: checked in the real app with headless Chrome (CDP), no DB writes.** Same
+      setup as #124. The script answered every POST with `Fetch.fulfillRequest`, so none reached
+      the backend. Afterwards the DB still had 500 rows and 46 cancelled, and the target
+      TRD-100450 was still `ACTIVE` with its seed `updatedAt`. Results:
+      - The row's Cancel opens an `alertdialog` with `aria-modal="true"`. Its accessible name
+        is "Cancel TRD-100450?" and its `aria-describedby` points at the warning text. Focus
+        starts on **Keep Trade**.
+      - Escape, a click on Keep Trade, and Enter on the focused button each close the dialog
+        and send no request.
+      - A confirm answered with 500 or 409 sends one `POST /api/trades/:id/cancel` (the DB id,
+        not the `TRD-` id). It toasts "Failed to cancel trade", the dialog closes, and the row
+        stays `ACTIVE` with its actions.
+      - A confirm whose 200 response was held for 1.5s shows "Cancelling…" with both buttons
+        disabled. Escape and a Keep click during that time leave the dialog open. When the
+        response arrives it toasts "Trade cancelled" and closes.
+      - No console errors and no uncaught exceptions or unhandled rejections.
+
+      Gotcha: headless Chrome reports `document.activeElement` reliably only after
+      `Emulation.setFocusEmulationEnabled({ enabled: true })`.
+
+133.  **BACKLOG: focus drops to `<body>` while the cancel is pending.** Disabling the focused
+      confirm button blurs it, so screen reader and keyboard users lose their place until the
+      dialog closes. Fix: use `aria-disabled` plus an early return instead of `disabled`, or
+      move focus to the dialog container (`tabIndex={-1}`) when submitting starts. The same
+      applies to the Create/Amend submit buttons. Low impact: the pending window is short and
+      the dialog closes right after.
