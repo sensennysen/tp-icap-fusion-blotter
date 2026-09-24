@@ -14,11 +14,20 @@ change._
 - Config is loaded once through `backend/src/config/env.ts` (Zod-validated `process.env`) — do not
   read `process.env` directly elsewhere.
 - Logging via `pino`/`pino-http` (`backend/src/lib/logger.ts`, `requestLogger.ts`) — never
-  `console.log`.
+  `console.log`. `requestLogger` redacts the `Cookie`/`Set-Cookie` headers (they carry the session).
+- Mock auth (`backend/src/middleware/auth.ts`): `authenticate` puts the session user on
+  `res.locals.user`, and never rejects. Guard routes with `requireRole(...)`, and read the user
+  with `sessionUser(res)`, which throws 401, not with a non-null assertion. Services take the
+  username as a plain argument and never see `req`/`res`. Mutation tests send
+  `sessionCookie()` from `backend/test/helpers/auth.ts`.
 
 ## Frontend (`frontend/`)
 
 - Server state lives in TanStack Query only — no Redux/Zustand/second cache layer (ADR-004).
+  That includes the session: `useAuth` reads `['auth', 'me']` (401 → `null`, not an error), and
+  the `MutationCache` in `createQueryClient()` invalidates it on any 401 mutation.
+- `apiClient` sends `credentials: 'include'` on every request; the API is cross-origin and the
+  session cookie is not sent without it.
 - Forms use React Hook Form + the Zod resolver against schemas imported from
   `@fusion-blotter/shared` — never hand-roll validation that duplicates a shared schema.
 - `useRealtimeTrades` reconciles WebSocket events into the exact query cache key the active filter
@@ -48,7 +57,8 @@ change._
 - All secrets/config via environment variables, documented in `.env.example` — never hardcoded.
 - Pin exact dependency versions (no `^`/`~`, no "latest", no beta/RC) — resolve real versions via
   the package manager, not from memory.
-- No authentication in this pass — auth is bonus-only per `ARCH.md` §13.
+- Auth is mock-only (`ARCH.md` §7) — an unsigned cookie with `{ username, role }`, no passwords or
+  identity provider. Mutations require the `trader` role; `viewer` is read-only in API and UI.
 
 ## Rationale
 

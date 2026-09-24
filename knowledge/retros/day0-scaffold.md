@@ -1003,7 +1003,52 @@ typecheck`, exits 1 with `TS2307: Cannot find module '../../generated/prisma/cli
       10, and Prisma's interactive transactions default to `maxWait` 2 s and `timeout` 5 s. A
       burst of more than ~10 concurrent writes to one hot trade could return P2028. That is fine
       at take-home scale; revisit if this ever takes real load.
-170.  **BACKLOG: `changedBy` is the `"system"` placeholder** (`AUDIT_CHANGED_BY` in
-      `tradeService.ts`) until bonus TASK-002 (mock auth) supplies a user.
+170.  **BACKLOG, done in bonus TASK-002: `changedBy` was the `"system"` placeholder**
+      (`AUDIT_CHANGED_BY` in `tradeService.ts`). It is now the mock-auth session username, passed
+      from the route into `TradeService.amend/cancel`.
 171.  **BACKLOG: no frontend view of audit history.** `GET /api/trades/:id/audit` exists, but the
       blotter UI does not call it yet.
+
+## Found by `/evaluate` + `/plan` + `/apply` on BONUS TASK-002 (2026-09-24)
+
+172.  **Express 5 loses path-param inference once a middleware sits before the handler.**
+      `router.patch('/trades/:id', guard, handler)` typed `req.params.id` as
+      `string | string[]` (TS2345) when the guard was `(req: Request, …) => void`. Typing the guard
+      as `RequestHandler<Record<string, string>>` restores `string`.
+173.  **docker compose runs the backend with `NODE_ENV=production` over plain http.** Tying
+      the cookie's `Secure` flag to `NODE_ENV` would make Safari drop the session under compose.
+      `Secure` now comes from a separate `AUTH_COOKIE_SECURE` (default `false`). This deviates from
+      the plan, which keyed it off `NODE_ENV`.
+174.  **`pino-http` logged the raw `Cookie` header.** With a session in it, that is a credential
+      in the logs. `requestLogger` now redacts `req.headers.cookie` and `res.headers["set-cookie"]`.
+      A test spying on `child.info` couldn't see this, because it gets the objects before
+      redaction. Capture at pino's destination stream instead. Mutation-checked.
+175.  **`apiClient.request()` assumed every 2xx has a `{ data }` body.** `logout` returns 204 with
+      no body, which would throw `Cannot read properties of undefined`. A 204 now resolves
+      `undefined`.
+176.  **The plan expected `middleware/errorHandler.test.ts` not to change.** It does change:
+      its "wired through createApp" cases send mutations and needed the session cookie. Any suite
+      that builds `createApp` and mutates is in the blast radius.
+177.  **BACKLOG: creates are not attributed.** `create` isn't audited (TASK-001 scope), so a new
+      trade doesn't record who made it. Its `trader` field is free text and unrelated to the session.
+178.  **BACKLOG: the WebSocket is unauthenticated.** It only broadcasts and the UI sits behind
+      login, but a direct `ws://` client can still read the event stream without a session.
+
+## Found by `/validate` on BONUS TASK-002 (2026-09-24)
+
+179.  **Live check against the running dev API (curl, `Origin: http://localhost:5173`).**
+      - The preflight returns `Access-Control-Allow-Credentials: true`.
+      - An amend with no session gets 401; as a viewer, 403 `FORBIDDEN`.
+      - Login sets `fusion_session` with `HttpOnly` and `SameSite=Lax`.
+      - A trader amend returns 200 and the audit row has `changedBy: "validator"`.
+      - After logout, `/auth/me` returns 401.
+        Side effect: one seeded dev-DB trade's quantity went from 2211 to 101, with one audit row.
+180.  **BACKLOG: no real-browser pass of the login UI.** The Claude-in-Chrome extension wasn't
+      connected. The login, viewer read-only and 401→login flows are covered only by jsdom tests
+      (`App.test.tsx`, `TradeBlotterPage.test.tsx`). The browser concern is whether the
+      `:5173 → :4000` cookie is stored and sent. It should be, since that pair is same-site and
+      CORS now allows credentials. Still, click through it once in Chrome and Safari.
+181.  **BACKLOG: the session cookie has no `Max-Age`.** It lasts as long as the browser session and
+      nothing expires it on the server. That's fine for a mock; a real session would need a TTL.
+182.  **Authorization runs before the existence check.** A viewer amending a missing trade gets
+      403, not 404. This is intended: the guard doesn't reveal whether a trade exists.
