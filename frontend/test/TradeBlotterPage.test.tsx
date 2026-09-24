@@ -7,9 +7,10 @@ import { TradeBlotterPage } from '../src/pages/TradeBlotterPage.js';
 import { ToastProvider } from '../src/components/Toast/ToastProvider.js';
 import { field, fill, json, validText } from './tradeForm.js';
 
-// Scope: the page's create/amend wiring only — toast, then keep the modal open
-// on failure (retro #94) or close it on success. Grid, filters and realtime
-// behaviour are covered by their own suites.
+// Scope: the page's mutation wiring only — toast, then keep a create/amend modal
+// open on failure (retro #94) or close it on success; the cancel confirm closes
+// either way (TASK-017 AC). Grid, filters and realtime behaviour are covered by
+// their own suites.
 
 class MockWebSocket {
   addEventListener() {}
@@ -121,5 +122,60 @@ describe('TradeBlotterPage create/amend wiring', () => {
 
     expect(await screen.findByText('Trade amended')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+});
+
+describe('TradeBlotterPage cancel wiring', () => {
+  const mutationCalls = () =>
+    vi
+      .mocked(fetch)
+      .mock.calls.filter(([, init]) => (init?.method ?? 'GET') !== 'GET')
+      .map(([url, init]) => `${init?.method} ${String(url)}`);
+
+  async function openCancel(user: UserEvent) {
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+    return screen.getByRole('alertdialog', { name: 'Cancel TRD-100001?' });
+  }
+
+  it('cancels the trade, toasts success and closes the dialog', async () => {
+    mutationResponse = () => json(200, { data: { ...trade, status: 'CANCELLED' } });
+    const user = renderPage();
+
+    await openCancel(user);
+    await user.click(screen.getByRole('button', { name: 'Cancel Trade' }));
+
+    expect(await screen.findByText('Trade cancelled')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(mutationCalls()).toHaveLength(1);
+    expect(mutationCalls()[0]).toMatch(/^POST .*\/trades\/trade-1\/cancel$/);
+  });
+
+  it.each([
+    ['a server error', () => failure.clone()],
+    [
+      'an already-cancelled conflict',
+      () =>
+        json(409, { error: { code: 'CONFLICT', message: 'Trade trade-1 is already cancelled' } }),
+    ],
+  ])('toasts %s and still closes the dialog', async (_label, response) => {
+    mutationResponse = response;
+    const user = renderPage();
+
+    await openCancel(user);
+    await user.click(screen.getByRole('button', { name: 'Cancel Trade' }));
+
+    expect(await screen.findByText('Failed to cancel trade')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.queryByText('Trade cancelled')).not.toBeInTheDocument();
+  });
+
+  it('closes on Keep Trade without sending a request', async () => {
+    const user = renderPage();
+
+    await openCancel(user);
+    await user.click(screen.getByRole('button', { name: 'Keep Trade' }));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mutationCalls()).toEqual([]);
   });
 });
