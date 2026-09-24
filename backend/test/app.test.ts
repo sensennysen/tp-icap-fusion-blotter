@@ -5,6 +5,7 @@ import { env } from '../src/config/env.js';
 import { NotFoundError } from '../src/lib/errors.js';
 import { logger } from '../src/lib/logger.js';
 import type { TradeService } from '../src/services/tradeService.js';
+import { sessionCookie } from './helpers/auth.js';
 
 // createApp with a stub service: proves the middleware wiring and that each route
 // delegates to the service, with no DB and no sockets.
@@ -28,6 +29,8 @@ const validPayload = {
 };
 
 const HOSTILE_ORIGIN = 'http://evil.example';
+
+const TRADER = sessionCookie({ username: 'asmith' });
 
 let logError: ReturnType<typeof vi.spyOn>;
 
@@ -65,6 +68,59 @@ describe('CORS', () => {
     expect(res.headers['access-control-allow-methods']).toContain('POST');
     expect(service.create).not.toHaveBeenCalled();
   });
+
+  // The frontend is a different origin, so the session cookie only travels
+  // when the server allows credentials.
+  it('allows credentials for the configured origin only', async () => {
+    const allowed = await request(app).get('/api/trades').set('Origin', env.CORS_ORIGIN);
+    const hostile = await request(app).get('/api/trades').set('Origin', HOSTILE_ORIGIN);
+
+    expect(allowed.headers['access-control-allow-credentials']).toBe('true');
+    expect(hostile.headers['access-control-allow-origin']).not.toBe(HOSTILE_ORIGIN);
+  });
+});
+
+describe('mock auth on mutations', () => {
+  const mutations = [
+    ['POST /trades', () => request(app).post('/api/trades').send(validPayload)],
+    ['PATCH /trades/:id', () => request(app).patch('/api/trades/t1').send({ quantity: 5 })],
+    ['POST /trades/:id/cancel', () => request(app).post('/api/trades/t1/cancel')],
+  ] as const;
+
+  it.each(mutations)('%s without a session returns 401 and skips the service', async (_, call) => {
+    const res = await call();
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('UNAUTHORIZED');
+    expect(service.create).not.toHaveBeenCalled();
+    expect(service.amend).not.toHaveBeenCalled();
+    expect(service.cancel).not.toHaveBeenCalled();
+  });
+
+  it.each(mutations)('%s as a viewer returns 403 and skips the service', async (_, call) => {
+    const res = await call().set('Cookie', sessionCookie({ role: 'viewer' }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('FORBIDDEN');
+    expect(service.create).not.toHaveBeenCalled();
+    expect(service.amend).not.toHaveBeenCalled();
+    expect(service.cancel).not.toHaveBeenCalled();
+  });
+
+  it('treats a tampered session cookie as no session (401)', async () => {
+    const res = await request(app)
+      .post('/api/trades/t1/cancel')
+      .set('Cookie', 'fusion_session=not-base64-json');
+
+    expect(res.status).toBe(401);
+    expect(service.cancel).not.toHaveBeenCalled();
+  });
+
+  it('keeps reads public', async () => {
+    const res = await request(app).get('/api/trades');
+
+    expect(res.status).toBe(200);
+  });
 });
 
 describe('helmet', () => {
@@ -80,6 +136,7 @@ describe('JSON body limit (100kb)', () => {
   it('accepts a body just under the limit', async () => {
     const res = await request(app)
       .post('/api/trades')
+      .set('Cookie', TRADER)
       .send({ ...validPayload, counterparty: 'X'.repeat(90 * 1024) });
 
     expect(res.status).toBe(201);
@@ -92,6 +149,7 @@ describe('JSON body limit (100kb)', () => {
   it('rejects a body over the limit before the service runs (currently 500)', async () => {
     const res = await request(app)
       .post('/api/trades')
+      .set('Cookie', TRADER)
       .send({ ...validPayload, counterparty: 'X'.repeat(101 * 1024) });
 
     expect(res.status).toBe(500);
@@ -160,6 +218,7 @@ describe('route delegation', () => {
   it('POST /trades passes the parsed body to service.create and returns 201', async () => {
     const res = await request(app)
       .post('/api/trades')
+      .set('Cookie', TRADER)
       .send({ ...validPayload, symbol: '  AAPL  ' });
 
     expect(res.status).toBe(201);
@@ -168,19 +227,22 @@ describe('route delegation', () => {
   });
 
   it('PATCH /trades/:id passes the id and parsed body to service.amend', async () => {
-    const res = await request(app).patch('/api/trades/t1').send({ quantity: 5 });
+    const res = await request(app)
+      .patch('/api/trades/t1')
+      .set('Cookie', TRADER)
+      .send({ quantity: 5 });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ data: { id: 't1' } });
-    expect(service.amend).toHaveBeenCalledWith('t1', { quantity: 5 });
+    expect(service.amend).toHaveBeenCalledWith('t1', { quantity: 5 }, 'asmith');
   });
 
   it('POST /trades/:id/cancel passes the id to service.cancel', async () => {
-    const res = await request(app).post('/api/trades/t1/cancel');
+    const res = await request(app).post('/api/trades/t1/cancel').set('Cookie', TRADER);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ data: { id: 't1' } });
-    expect(service.cancel).toHaveBeenCalledWith('t1');
+    expect(service.cancel).toHaveBeenCalledWith('t1', 'asmith');
   });
 
   it('never calls the service when validation fails', async () => {
@@ -188,8 +250,9 @@ describe('route delegation', () => {
       request(app).get('/api/trades?side=HOLD'),
       request(app)
         .post('/api/trades')
+        .set('Cookie', TRADER)
         .send({ ...validPayload, quantity: -1 }),
-      request(app).patch('/api/trades/t1').send({ price: -5 }),
+      request(app).patch('/api/trades/t1').set('Cookie', TRADER).send({ price: -5 }),
     ]);
 
     expect(responses.map((r) => r.status)).toEqual([400, 400, 400]);

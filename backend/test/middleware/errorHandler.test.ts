@@ -4,10 +4,18 @@ import request from 'supertest';
 import { z } from 'zod';
 import { Prisma } from '../../generated/prisma/client.ts';
 import { createApp } from '../../src/app.js';
-import { AppError, ConflictError, NotFoundError, ValidationError } from '../../src/lib/errors.js';
+import {
+  AppError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  UnauthorizedError,
+  ValidationError,
+} from '../../src/lib/errors.js';
 import { logger } from '../../src/lib/logger.js';
 import { errorHandler } from '../../src/middleware/errorHandler.js';
 import type { TradeService } from '../../src/services/tradeService.js';
+import { sessionCookie } from '../helpers/auth.js';
 
 const INTERNAL_BODY = {
   error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' },
@@ -52,6 +60,7 @@ describe('errorHandler: ZodError -> 400 VALIDATION_ERROR', () => {
   it('maps a bad create payload to per-field messages', async () => {
     const res = await request(app)
       .post('/api/trades')
+      .set('Cookie', sessionCookie())
       .send({ ...validPayload, quantity: -1, price: 0, symbol: '   ' });
 
     expect(res.status).toBe(400);
@@ -68,7 +77,7 @@ describe('errorHandler: ZodError -> 400 VALIDATION_ERROR', () => {
   });
 
   it('reports every missing field, not just the first', async () => {
-    const res = await request(app).post('/api/trades').send({});
+    const res = await request(app).post('/api/trades').set('Cookie', sessionCookie()).send({});
 
     expect(res.status).toBe(400);
     expect(Object.keys(res.body.error.fields).sort()).toEqual([
@@ -129,6 +138,8 @@ describe('errorHandler: AppError subclasses -> own status and code', () => {
     ['ValidationError', new ValidationError('bad'), 400, 'VALIDATION_ERROR'],
     ['NotFoundError', new NotFoundError('gone'), 404, 'NOT_FOUND'],
     ['ConflictError', new ConflictError('clash'), 409, 'CONFLICT'],
+    ['UnauthorizedError', new UnauthorizedError('who are you'), 401, 'UNAUTHORIZED'],
+    ['ForbiddenError', new ForbiddenError('not you'), 403, 'FORBIDDEN'],
     ['AppError', new AppError(418, 'TEAPOT', 'short and stout'), 418, 'TEAPOT'],
   ])('%s', async (_name, err, status, code) => {
     const res = await request(appThrowing(err)).get('/boom');
@@ -236,7 +247,7 @@ describe('errorHandler: wired through createApp (real middleware order)', () => 
   it('turns a service ConflictError into a 409 envelope', async () => {
     service.cancel.mockRejectedValue(new ConflictError('already cancelled'));
 
-    const res = await request(app).post('/api/trades/x/cancel');
+    const res = await request(app).post('/api/trades/x/cancel').set('Cookie', sessionCookie());
 
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: { code: 'CONFLICT', message: 'already cancelled' } });
@@ -257,6 +268,7 @@ describe('errorHandler: wired through createApp (real middleware order)', () => 
   it('returns a 400 envelope for a malformed JSON body, not a 500', async () => {
     const res = await request(app)
       .post('/api/trades')
+      .set('Cookie', sessionCookie())
       .set('Content-Type', 'application/json')
       .send('{"symbol": ');
 
@@ -272,7 +284,10 @@ describe('errorHandler: wired through createApp (real middleware order)', () => 
   it('still returns a 201-path success without the handler interfering', async () => {
     service.create.mockResolvedValue({ id: '1', ...validPayload });
 
-    const res = await request(app).post('/api/trades').send(validPayload);
+    const res = await request(app)
+      .post('/api/trades')
+      .set('Cookie', sessionCookie())
+      .send(validPayload);
 
     expect(res.status).toBe(201);
     expect(logError).not.toHaveBeenCalled();

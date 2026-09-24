@@ -27,6 +27,9 @@ const createInput = {
   counterparty: 'GOLDMAN',
 } as const;
 
+// The logged-in user the route passes down as changedBy.
+const ACTOR = 'asmith';
+
 vi.mock('../src/repositories/tradeRepository.js', () => ({
   tradeRepository: {
     list: vi.fn(),
@@ -44,7 +47,7 @@ vi.mock('../src/repositories/tradeAuditRepository.js', () => ({
 
 const { tradeRepository } = await import('../src/repositories/tradeRepository.js');
 const { tradeAuditRepository } = await import('../src/repositories/tradeAuditRepository.js');
-const { TradeService, AUDIT_CHANGED_BY } = await import('../src/services/tradeService.js');
+const { TradeService } = await import('../src/services/tradeService.js');
 const { ConflictError, NotFoundError } = await import('../src/lib/errors.js');
 
 describe('TradeService', () => {
@@ -127,13 +130,13 @@ describe('TradeService', () => {
       const amended: Trade = { ...baseTrade, quantity: 250 };
       vi.mocked(tradeRepository.update).mockResolvedValue(amended);
 
-      const result = await service.amend('trade-1', { quantity: 250 });
+      const result = await service.amend('trade-1', { quantity: 250 }, ACTOR);
 
       expect(result).toEqual(amended);
       expect(tradeRepository.update).toHaveBeenCalledExactlyOnceWith(
         'trade-1',
         { quantity: 250 },
-        AUDIT_CHANGED_BY,
+        ACTOR,
       );
       expect(tradeRepository.findById).not.toHaveBeenCalled();
       expect(broadcast).toHaveBeenCalledTimes(1);
@@ -146,7 +149,7 @@ describe('TradeService', () => {
       vi.mocked(tradeRepository.update).mockResolvedValue(null);
       vi.mocked(tradeRepository.findById).mockResolvedValue({ ...baseTrade, status: 'CANCELLED' });
 
-      const err = await service.amend('trade-1', { quantity: 200 }).catch((e: unknown) => e);
+      const err = await service.amend('trade-1', { quantity: 200 }, ACTOR).catch((e: unknown) => e);
 
       expect(err).toBeInstanceOf(ConflictError);
       expect(err).toMatchObject({ statusCode: 409, code: 'CONFLICT' });
@@ -157,7 +160,7 @@ describe('TradeService', () => {
       vi.mocked(tradeRepository.update).mockResolvedValue(null);
       vi.mocked(tradeRepository.findById).mockResolvedValue(null);
 
-      await expect(service.amend('missing', { quantity: 200 })).rejects.toBeInstanceOf(
+      await expect(service.amend('missing', { quantity: 200 }, ACTOR)).rejects.toBeInstanceOf(
         NotFoundError,
       );
       expect(broadcast).not.toHaveBeenCalled();
@@ -166,7 +169,7 @@ describe('TradeService', () => {
     it('does not broadcast when the repository update rejects', async () => {
       vi.mocked(tradeRepository.update).mockRejectedValue(new Error('db down'));
 
-      await expect(service.amend('trade-1', { quantity: 200 })).rejects.toThrow('db down');
+      await expect(service.amend('trade-1', { quantity: 200 }, ACTOR)).rejects.toThrow('db down');
       expect(broadcast).not.toHaveBeenCalled();
     });
   });
@@ -176,10 +179,10 @@ describe('TradeService', () => {
       const cancelled: Trade = { ...baseTrade, status: 'CANCELLED' };
       vi.mocked(tradeRepository.cancel).mockResolvedValue(cancelled);
 
-      const result = await service.cancel('trade-1');
+      const result = await service.cancel('trade-1', ACTOR);
 
       expect(result.status).toBe('CANCELLED');
-      expect(tradeRepository.cancel).toHaveBeenCalledExactlyOnceWith('trade-1', AUDIT_CHANGED_BY);
+      expect(tradeRepository.cancel).toHaveBeenCalledExactlyOnceWith('trade-1', ACTOR);
       expect(tradeRepository.findById).not.toHaveBeenCalled();
       expect(broadcast).toHaveBeenCalledTimes(1);
       expect(broadcast).toHaveBeenCalledWith({ type: 'TRADE_CANCELLED', payload: cancelled });
@@ -189,7 +192,7 @@ describe('TradeService', () => {
       vi.mocked(tradeRepository.cancel).mockResolvedValue(null);
       vi.mocked(tradeRepository.findById).mockResolvedValue({ ...baseTrade, status: 'CANCELLED' });
 
-      const err = await service.cancel('trade-1').catch((e: unknown) => e);
+      const err = await service.cancel('trade-1', ACTOR).catch((e: unknown) => e);
 
       expect(err).toBeInstanceOf(ConflictError);
       expect(err).toMatchObject({ statusCode: 409, code: 'CONFLICT' });
@@ -200,14 +203,14 @@ describe('TradeService', () => {
       vi.mocked(tradeRepository.cancel).mockResolvedValue(null);
       vi.mocked(tradeRepository.findById).mockResolvedValue(null);
 
-      await expect(service.cancel('missing')).rejects.toBeInstanceOf(NotFoundError);
+      await expect(service.cancel('missing', ACTOR)).rejects.toBeInstanceOf(NotFoundError);
       expect(broadcast).not.toHaveBeenCalled();
     });
 
     it('does not broadcast when the repository cancel rejects', async () => {
       vi.mocked(tradeRepository.cancel).mockRejectedValue(new Error('db down'));
 
-      await expect(service.cancel('trade-1')).rejects.toThrow('db down');
+      await expect(service.cancel('trade-1', ACTOR)).rejects.toThrow('db down');
       expect(broadcast).not.toHaveBeenCalled();
     });
 
@@ -218,18 +221,11 @@ describe('TradeService', () => {
         .mockResolvedValueOnce(null);
       vi.mocked(tradeRepository.findById).mockResolvedValue(cancelled);
 
-      await service.cancel('trade-1');
-      await expect(service.cancel('trade-1')).rejects.toBeInstanceOf(ConflictError);
+      await service.cancel('trade-1', ACTOR);
+      await expect(service.cancel('trade-1', ACTOR)).rejects.toBeInstanceOf(ConflictError);
 
       expect(tradeRepository.cancel).toHaveBeenCalledTimes(2);
       expect(broadcast).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe('audit attribution', () => {
-    // No auth exists yet (TASK-002), so changedBy is a fixed placeholder.
-    it('attributes audit rows to the "system" placeholder until auth lands', () => {
-      expect(AUDIT_CHANGED_BY).toBe('system');
     });
   });
 

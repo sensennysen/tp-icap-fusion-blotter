@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import { createTradeSchema, amendTradeSchema, tradeListQuerySchema } from '@fusion-blotter/shared';
 import type { TradeService } from '../services/tradeService.js';
+import { requireRole, sessionUser } from '../middleware/auth.js';
 
 export function createTradesRouter(tradeService: TradeService): Router {
   const router = Router();
+  const requireTrader = requireRole('trader');
 
   router.get('/trades', async (req, res, next) => {
     try {
@@ -33,7 +35,7 @@ export function createTradesRouter(tradeService: TradeService): Router {
     }
   });
 
-  router.post('/trades', async (req, res, next) => {
+  router.post('/trades', requireTrader, async (req, res, next) => {
     try {
       const input = createTradeSchema.parse(req.body);
       const trade = await tradeService.create(input);
@@ -43,19 +45,19 @@ export function createTradesRouter(tradeService: TradeService): Router {
     }
   });
 
-  router.patch('/trades/:id', async (req, res, next) => {
+  router.patch('/trades/:id', requireTrader, async (req, res, next) => {
     try {
       const input = amendTradeSchema.parse(req.body);
-      const trade = await tradeService.amend(req.params.id, input);
+      const trade = await tradeService.amend(req.params.id, input, sessionUser(res).username);
       res.json({ data: trade });
     } catch (err) {
       next(err);
     }
   });
 
-  router.post('/trades/:id/cancel', async (req, res, next) => {
+  router.post('/trades/:id/cancel', requireTrader, async (req, res, next) => {
     try {
-      const trade = await tradeService.cancel(req.params.id);
+      const trade = await tradeService.cancel(req.params.id, sessionUser(res).username);
       res.json({ data: trade });
     } catch (err) {
       next(err);
