@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { amendTradeSchema, createTradeSchema, tradeListQuerySchema } from './schemas.js';
+import {
+  MAX_PRICE,
+  MAX_QUANTITY,
+  amendTradeSchema,
+  createTradeSchema,
+  tradeListQuerySchema,
+} from './schemas.js';
 
 const valid = {
   symbol: 'AAPL',
@@ -74,6 +80,55 @@ describe('createTradeSchema', () => {
       expect(messages.price).toBe('price must be positive');
     }
   });
+
+  describe('column limits (INTEGER quantity, DECIMAL(12,4) price)', () => {
+    function messageFor(input: Record<string, unknown>, field: string) {
+      const result = createTradeSchema.safeParse({ ...valid, ...input });
+      return result.success
+        ? undefined
+        : result.error.issues.find((issue) => issue.path[0] === field)?.message;
+    }
+
+    it('accepts quantity up to the 32-bit INTEGER max and rejects one above it', () => {
+      expect(MAX_QUANTITY).toBe(2 ** 31 - 1);
+      expect(messageFor({ quantity: MAX_QUANTITY }, 'quantity')).toBeUndefined();
+      expect(messageFor({ quantity: MAX_QUANTITY + 1 }, 'quantity')).toBe('quantity is too large');
+    });
+
+    it('accepts price up to the DECIMAL(12,4) max and rejects one tick above it', () => {
+      expect(messageFor({ price: MAX_PRICE }, 'price')).toBeUndefined();
+      expect(messageFor({ price: 100_000_000 }, 'price')).toBe('price is too large');
+    });
+
+    it.each([189.1234, 10.1249, 0.0001, 189.5, 42, MAX_PRICE])(
+      'accepts price %s (≤4 decimal places)',
+      (price) => {
+        expect(messageFor({ price }, 'price')).toBeUndefined();
+      },
+    );
+
+    it.each([189.12345, 0.00001, 10.12491])('rejects price %s (>4 decimal places)', (price) => {
+      expect(messageFor({ price }, 'price')).toBe('price allows at most 4 decimal places');
+    });
+
+    it('names a non-integer quantity', () => {
+      expect(messageFor({ quantity: 1.5 }, 'quantity')).toBe('quantity must be a whole number');
+    });
+
+    it.each([
+      ['NaN (an empty number input)', Number.NaN],
+      ['null', null],
+      ['undefined', undefined],
+    ])('reports %s quantity and price as required', (_label, value) => {
+      expect(messageFor({ quantity: value }, 'quantity')).toBe('quantity is required');
+      expect(messageFor({ price: value }, 'price')).toBe('price is required');
+    });
+
+    it('reports a non-numeric quantity and price as "must be a number"', () => {
+      expect(messageFor({ quantity: '100' }, 'quantity')).toBe('quantity must be a number');
+      expect(messageFor({ price: Infinity }, 'price')).toBe('price must be a number');
+    });
+  });
 });
 
 describe('amendTradeSchema', () => {
@@ -94,6 +149,13 @@ describe('amendTradeSchema', () => {
     expect(amendTradeSchema.safeParse({ price: -1 }).success).toBe(false);
     expect(amendTradeSchema.safeParse({ side: 'HOLD' }).success).toBe(false);
     expect(amendTradeSchema.safeParse({ trader: '' }).success).toBe(false);
+  });
+
+  it('enforces the same column limits on supplied fields', () => {
+    expect(amendTradeSchema.safeParse({ quantity: MAX_QUANTITY + 1 }).success).toBe(false);
+    expect(amendTradeSchema.safeParse({ price: 100_000_000 }).success).toBe(false);
+    expect(amendTradeSchema.safeParse({ price: 189.12345 }).success).toBe(false);
+    expect(amendTradeSchema.safeParse({ quantity: Number.NaN }).success).toBe(false);
   });
 });
 
