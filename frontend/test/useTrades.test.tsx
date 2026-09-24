@@ -117,6 +117,19 @@ describe('useTrades list query', () => {
     expect(queryClient.getQueryCache().findAll({ queryKey: tradesQueryKey })).toHaveLength(1);
   });
 
+  it('normalises filters so untrimmed and blank text share the trimmed key', async () => {
+    const { rerender } = await renderLoaded({ symbol: ' AAPL ', trader: '   ' });
+
+    expect(listTrades).toHaveBeenCalledWith({ symbol: 'AAPL' });
+    expect(queryClient.getQueryData([...tradesQueryKey, { symbol: 'AAPL' }])).toEqual([trade]);
+
+    rerender({ filters: { symbol: 'AAPL' } });
+    rerender({ filters: { symbol: 'AAPL ', trader: '' } });
+
+    expect(listTrades).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryCache().findAll({ queryKey: tradesQueryKey })).toHaveLength(1);
+  });
+
   it('reads data already written to its key without fetching', () => {
     const filters: TradeListQuery = { trader: 'jdoe' };
     queryClient.setQueryData([...tradesQueryKey, filters], [trade]);
