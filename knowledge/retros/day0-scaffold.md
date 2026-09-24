@@ -788,3 +788,65 @@ src/server.ts"` does not match the tsx process (its argv is `… loader.mjs src/
       move focus to the dialog container (`tabIndex={-1}`) when submitting starts. The same
       applies to the Create/Amend submit buttons. Low impact: the pending window is short and
       the dialog closes right after.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-018 (2026-09-24)
+
+134.  **A failed Refresh did nothing.** The button called `refetch()`, which resolves with
+      `isError` instead of throwing, so the grid kept its rows and nobody was told. The page
+      now awaits the result and toasts "Failed to refresh trades" when it failed.
+135.  **A failed load looked like an empty result (closes #69).** The page ignored `isError`,
+      so a failed first load showed "No trades match the current filters." When `isError` is
+      true and there are no rows, the page now shows a `role="alert"` message ("Couldn't load
+      trades. Use Refresh to retry.", `text-sell` token) in place of the grid. If rows are
+      already cached (a failed refetch), the grid stays. `TradeGrid` is unchanged.
+136.  **The rest of the page wiring was already correct and is now tested.** New checks:
+      - The filters, Refresh and New Trade render before the grid, in the ARCH §11 order.
+      - Refresh refetches even inside `staleTime` and shows the new rows.
+      - A failed Refresh toasts and keeps the rows. A failed load shows the alert, and
+        Refresh then recovers.
+      - Choosing a Side filter sends `side=SELL`, and the grid shows only what came back.
+      - WebSocket TRADE_CREATED, TRADE_AMENDED and TRADE_CANCELLED events reach the grid
+        with their info toast and **no extra GET**. A cancelled row is dimmed and loses its
+        actions.
+137.  **New tests:** 8 more in `TradeBlotterPage.test.tsx` (now 16). The `MockWebSocket` stub
+      can now emit; the 8 earlier tests pass unchanged. Frontend total: 234.
+      Mutation-checked with 8 mutants, all killed: Refresh not refetching, no Refresh toast,
+      no error branch, error branch hiding cached rows, `filters` not passed to `useTrades`,
+      `useRealtimeTrades` removed, toolbar moved below the grid, and filters removed. Pattern
+      in `knowledge/patterns/blotter-page-tests.md`.
+138.  **Still open, out of scope for TASK-018:** #125 (a pending save can still be dismissed),
+      #131 (the cancel dialog can show a trade that is already cancelled), #133 (focus drops
+      while pending) and #93 (local `pnpm dev` has no API or WebSocket URL). The graph still
+      has no import edge from the page to `TradeGrid`, `TradeFilters` or `ToastProvider`
+      (#80). Use grep for blast radius.
+
+## Found by `/validate` on TASK-018 (2026-09-24)
+
+139.  **`/validate`: checked in the real app with headless Chrome (CDP), no DB writes.** The
+      local backend was already running. Vite was started with `VITE_API_BASE_URL` pointing at
+      it and `VITE_WS_URL=ws://localhost:4100`, a throwaway `ws` server that broadcasts
+      whatever is POSTed to it. That makes this the first live check of the WebSocket path
+      (#108, #120 and #124 each skipped it because it needed a DB write). CDP `Fetch` was used
+      to fail GETs on demand. Non-GETs would have been failed too, but none were sent.
+      Afterwards the DB still had 500 rows and 46 cancelled, and TRD-100323 was still BAC /
+      `ACTIVE` with its seed `updatedAt`. Results:
+      - All 500 rows load. The `Filter trades` fieldset (Symbol, Trader, Side, Status),
+        Refresh and New Trade all come before the `Trade blotter` table.
+      - Side = SELL sends one `?side=SELL` and shows 247 rows, all SELL, the same as the API.
+      - Refresh inside `staleTime` sends one GET and shows no toast.
+      - A failed Refresh shows "Failed to refresh trades" after 2 GETs (`retry: 1`). The 500
+        rows stay, and there is no load-error message.
+      - A failed first load shows the `role="alert"` message, not "No trades match", and
+        renders no table. Refresh then brings back all 500 rows and clears the message.
+      - Pushed TRADE_CREATED (TRD-999999), TRADE_AMENDED (symbol → AMND) and TRADE_CANCELLED
+        for TRD-100323: 501 rows, the amended symbol shown, the row at `opacity: 0.5` with no
+        buttons, toasts "created: TRD-999999", "amended: TRD-100323" and "cancelled:
+        TRD-100323", and **0 GETs** during the events.
+      - No console errors and no uncaught exceptions.
+140.  **`/validate` graph check: no unplanned boundary crossings.** The change is limited to the
+      page's own JSX and click handler. The graph query matched backend `errorHandler` nodes
+      only on the words "error"/"toast". Those are not edges from this change.
+141.  **BACKLOG: Refresh gives no feedback while it runs.** The button is never disabled and
+      shows no spinner, and a failure only shows its toast after the retry, about 1s later
+      (#59). A click on a slow network looks like nothing happened. Fix: expose `isFetching`
+      from `useTrades`, then disable the button and spin the icon while it is true.
