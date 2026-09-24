@@ -26,6 +26,10 @@ change._
   `[...tradesQueryKey, filters]` variant (each against its own filters) so a filter set revisited
   within `staleTime` is not stale, and it skips variants with no data yet (their first fetch is the
   source of truth). Frames that fail the `TradeEvent` guard are dropped, never thrown.
+- A trades query key or list request is always built from `normalizeTradeListQuery(filters)`
+  (trimmed text, blank/undefined fields dropped), never from raw filter-bar state. The key's
+  filters are what `useRealtimeTrades` matches events against, so they must equal what the
+  server filtered by. Filter inputs keep the raw text; only the key/request is normalised.
 - Tailwind v4: any hand-written base selector in `globals.css` (`html`, `body`, etc.) must live
   inside `@layer base { }` — an unlayered rule silently beats every `text-*`/`bg-*` utility
   app-wide, not just on hover.

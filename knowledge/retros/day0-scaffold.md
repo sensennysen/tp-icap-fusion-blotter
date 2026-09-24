@@ -561,3 +561,74 @@ src/server.ts"` does not match the tsx process (its argv is `… loader.mjs src/
 106.  **BACKLOG: the seed gives only 30 distinct timestamps for 500 trades** (one per day). The
       default sort therefore has runs of about 17 tied rows, which keep the API's order within
       a day (Postgres picks it). The fix belongs to the seed (TASK-009), not the grid.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-015 (2026-09-24)
+
+107.  **A whitespace-only filter broke the grid.** `toUndefined` only mapped `''` to
+      `undefined`, so a stray space in Symbol or Trader was sent as `symbol=%20`.
+      `tradeListQuerySchema` trims it to `''`, fails `min(1)`, and the list request returned 400. `useTrades` now runs every filter set through `normalizeTradeListQuery`
+      (`frontend/src/lib/tradeListQuery.ts`) before it builds the key or the request. That
+      function trims symbol and trader, and drops blank and undefined fields.
+108.  **Leading and trailing spaces split the client from the server.** The server trimmed
+      `"AAPL "` and returned AAPL trades, but the cache key and `useRealtimeTrades`'
+      `matchesFilter` kept `"AAPL "`. So every live AAPL event failed `===` and was dropped
+      from that list. The key now holds the normalised filters, and `useRealtimeTrades` reads
+      filters from `key[1]`, so it gets the fix without a change. Typing a surrounding space
+      also no longer adds a key or a request.
+109.  **The trim happens at the query boundary, not in the input.** The inputs are
+      controlled, and trimming their value would delete the space as you type it
+      (`"j doe"` could not be typed). They keep the raw text, and only what becomes a key or a
+      request is normalised.
+110.  **The side and status handlers are typed.** A shared `keyof TradeListQuery` handler
+      wrote any string into `side` and `status`. They now go through
+      `sideSchema.safeParse(value).data` / `tradeStatusSchema.safeParse(value).data`, so
+      "All" (`''`) becomes `undefined` and nothing outside the enum can get in.
+111.  **New tests:** `TradeFilters.test.tsx` has 24 tests: the controls with a mocked
+      `onChange`, plus a `TradeFilters` + `useTrades` harness with a stubbed `fetch`.
+      `tradeListQuery.test.ts` has 8, and `useTrades.test.tsx` has 1 new one. 3 fail against
+      the old code, and they are exactly #107/#108. Both ACs already held for ordinary input.
+      Pattern in `knowledge/patterns/trade-filters-tests.md`.
+112.  **Mutation-checked: 17 mutants, 17 killed.** Covered: each trim, each blank-drop, each
+      pass-through field, key vs request normalisation in `useTrades`, `toUndefined`, the
+      `...filters` spread, both schema parses, a crossed handler, and controlled `value`s.
+113.  **Still open, out of scope for TASK-015:**
+      - No debounce. Typing "AAPL" fetches A, AA, AAP and AAPL, and the in-between keys return
+        empty lists under exact matching. The CSV says each onChange "immediately updates
+        real query params", so a debounce needs an AC change.
+      - Matching is exact and case-sensitive (`aapl` finds nothing). This is the backend and
+        `matchesFilter` contract, and they have to change together.
+      - There is no "Clear filters" control.
+
+## Found by `/validate` on TASK-015 (2026-09-24)
+
+114.  **`/validate`: checked in the real app with headless Chrome (CDP), no DB writes.** Same
+      setup as #102. The backend ran with `node --env-file=../.env --import tsx src/server.ts`,
+      so `.env` is never printed. Vite ran with the URLs on the command line (#93 is still
+      open). Tested against the 500-row dev database, recording each `GET /api/trades`.
+      Results:
+      - Typing `" AAPL "` key by key sent exactly `symbol=A`, `AA`, `AAP`, `AAPL`, with no
+        request for either space. The grid showed the 55 AAPL rows and the input kept
+        `" AAPL "`.
+      - Side=SELL sent `symbol=AAPL&side=SELL`, and every row was AAPL SELL.
+      - Clearing Symbol sent `side=SELL` with no `symbol`.
+      - Status=CANCELLED added `status=CANCELLED`. Status=All then sent
+        `trader=asmith&side=SELL` with no `status`, and the rows had both statuses.
+      - A whitespace-only Trader sent no request and no `trader` param.
+      - No API errors and no console errors.
+      - The old bug still reproduces at the API: `?symbol=%20` returns `VALIDATION_ERROR`,
+        which the client no longer sends.
+      - Not checked live: #108's WebSocket path, which needs a DB write. It is covered by
+        `useTrades` / `useRealtimeTrades` tests on the normalised key.
+
+      Gotchas:
+      - Count only `GET`s. Every request has a CORS preflight, so an unfiltered log shows each
+        request twice (see #115).
+      - Params follow the object's insertion order (`trader=…&side=…`), so compare them as a
+        set, not as a string.
+
+115.  **BACKLOG: every list request pays a CORS preflight.** `apiClient.request` sets
+      `Content-Type: application/json` on every call, including bodyless GETs, which makes the
+      request non-simple. The backend's `cors()` has no `maxAge`. Filtering therefore costs 2
+      round trips per keystroke (15 `OPTIONS` for 15 `GET`s in #114). Fix: send the header only
+      when there is a body, or set `maxAge` on `cors()`. This is the `apiClient` / backend
+      boundary (TASK-010/005), not the filters.
