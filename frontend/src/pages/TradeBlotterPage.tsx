@@ -16,7 +16,8 @@ export function TradeBlotterPage() {
   const [amendTarget, setAmendTarget] = useState<Trade | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Trade | null>(null);
 
-  const { trades, isLoading, refetch, createTrade, amendTrade, cancelTrade } = useTrades(filters);
+  const { trades, isLoading, isError, refetch, createTrade, amendTrade, cancelTrade } =
+    useTrades(filters);
   const { showToast } = useToast();
 
   useRealtimeTrades(filters);
@@ -31,7 +32,11 @@ export function TradeBlotterPage() {
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => refetch()}
+            onClick={async () => {
+              // refetch() resolves with the error instead of throwing.
+              const result = await refetch();
+              if (result.isError) showToast('error', 'Failed to refresh trades');
+            }}
             aria-label="Refresh trades"
             className="flex items-center gap-1 rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
           >
@@ -50,12 +55,19 @@ export function TradeBlotterPage() {
       </div>
 
       <div className="overflow-x-auto rounded border border-slate-200 bg-white">
-        <TradeGrid
-          trades={trades}
-          isLoading={isLoading}
-          onAmend={setAmendTarget}
-          onCancel={setCancelTarget}
-        />
+        {isError && trades.length === 0 ? (
+          // Without this a failed load would read as "No trades match the current filters".
+          <p role="alert" className="p-4 text-sm text-sell">
+            Couldn't load trades. Use Refresh to retry.
+          </p>
+        ) : (
+          <TradeGrid
+            trades={trades}
+            isLoading={isLoading}
+            onAmend={setAmendTarget}
+            onCancel={setCancelTarget}
+          />
+        )}
       </div>
 
       {isCreateOpen && (
