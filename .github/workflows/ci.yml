@@ -47,6 +47,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # backend/generated/ is gitignored and nothing generates it on install —
+      # typecheck, test and build all import the Prisma client from it.
+      - name: Generate Prisma client
+        run: pnpm --filter backend exec prisma generate
+
       - name: Lint
         run: pnpm lint
 
