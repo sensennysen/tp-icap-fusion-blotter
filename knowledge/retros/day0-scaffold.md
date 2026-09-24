@@ -1052,3 +1052,53 @@ typecheck`, exits 1 with `TS2307: Cannot find module '../../generated/prisma/cli
       nothing expires it on the server. That's fine for a mock; a real session would need a TTL.
 182.  **Authorization runs before the existence check.** A viewer amending a missing trade gets
       403, not 404. This is intended: the guard doesn't reveal whether a trade exists.
+
+## Found by `/evaluate` + `/plan` + `/apply` on BONUS TASK-003 (2026-09-24)
+
+183.  **Virtualization is gated on row count (`VIRTUALIZE_THRESHOLD = 200`).** At or below the
+      threshold the grid renders exactly as before, with every row and no scroll container. Above
+      it, `@tanstack/react-virtual` (3.14.13, pinned) renders a window of rows between two
+      `aria-hidden` spacer rows inside a `max-h-[70vh] overflow-auto` container with a sticky
+      `<thead>`. Spacer rows keep native `<table>` layout, so the rowgroup/row/cell structure the
+      tests query is unchanged. The existing `TradeGrid.test.tsx` cases pass unmodified, because
+      their fixtures sit under the threshold.
+184.  **Resolves the open jsdom question in #101.** virtual-core reads the viewport from
+      `offsetHeight`, which jsdom reports as 0, and skips observing because jsdom has no
+      `ResizeObserver`. Without a stub a virtualized grid renders zero rows. The new tests
+      stub `HTMLElement.prototype.offsetHeight`. Pattern in `knowledge/patterns/trade-grid-tests.md`.
+185.  **Mutation-checked: 15 mutants, 13 killed.** `getItemKey` survived and was removed. React
+      keys already come from `row.id` in `renderRow`, and the virtualizer's key only feeds its
+      measurement cache, which was unused while rows weren't measured (#187 adds measurement; React keys still come
+      from `row.id`). The plan's claim that it
+      prevented remounts on prepend was wrong. `enabled: true` is equivalent: below the threshold
+      there is no scroll element and nothing reads the virtualizer's output.
+186.  **Known trade-off:** in the virtualized path, a focused Amend button that scrolls out of the
+      window is unmounted and loses focus.
+
+## Found by `/validate` on BONUS TASK-003 (2026-09-24)
+
+187.  **FIX NOW, fixed: the fixed 37px row estimate was wrong in the real app.** Headless Chrome
+      (CDP, 1440×900) served 2,000 fake trades by intercepting `GET /api/trades` and
+      `/api/auth/me`, with no DB writes. Real rows were 56.5–57px: Trade ID, Book and Timestamp
+      wrap onto two lines in the ~1,100px table. Each row left the window at 57px but was
+      reserved at 37px, so content shifted ~20px per row, which shows up as scroll jumps. Fix: rows
+      pass `ref={virtualizer.measureElement}` and `data-index`, and the constant became
+      `ESTIMATED_ROW_PX`, a first guess only. After the fix, 200 × 30px scroll steps moved a
+      visible row by exactly the scroll delta (max error 0.5px, subpixel).
+      The #186 note about a slightly wrong scrollbar no longer applies. The jsdom stub now
+      returns different `offsetHeight`s for `<tr>` and the scroll container: rows are measured
+      with `offsetHeight` too, so one stub for every element made each row viewport-tall.
+188.  **Acceptance check, 2,000 rows in the real app.**
+      - Scrolling the full list in 240 steps: frame gaps p50 16.7ms, p95 ~26ms, max ~32ms, none
+        over 50ms, and no long tasks.
+      - Sorting by Quantity takes ~27ms to paint and orders the whole dataset (2000, 1999, 1998…).
+      - The sticky `<thead>` stays at offset 0 while scrolled.
+      - ~20–36 rows are in the DOM at any time, and there were no console errors.
+      - Mutation re-check: 10/10 killed, including removing the `measureElement` ref,
+        `data-index`, and the index passed to `renderRow`.
+189.  **BACKLOG: column widths shift 1–3px while scrolling.** The table uses auto layout, so widths
+      follow whichever rows are rendered (e.g. Timestamp 160 → 163px). It's barely visible;
+      `table-fixed` with explicit widths would remove it.
+190.  **BACKLOG: no real-browser check of a live WebSocket prepend while virtualized.** It would
+      need a DB write through the running backend. The jsdom test covers sort placement and
+      spacer growth; scroll anchoring on a prepend above the viewport is unverified.
