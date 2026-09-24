@@ -850,3 +850,61 @@ src/server.ts"` does not match the tsx process (its argv is `… loader.mjs src/
       shows no spinner, and a failure only shows its toast after the retry, about 1s later
       (#59). A click on a slow network looks like nothing happened. Fix: expose `isFetching`
       from `useTrades`, then disable the button and spin the icon while it is true.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-019 (2026-09-24)
+
+142.  **There was no `.dockerignore`.** Both images build from the repo root, and
+      `COPY backend backend` / `COPY frontend frontend` copied the host's `node_modules` (pnpm
+      symlinks, or junctions on Windows), `backend/generated` and `frontend/dist` over what the
+      container had just installed and built. The build also sent the root `.env` to the daemon.
+      A root `.dockerignore` now excludes `**/node_modules`, `**/dist`, `**/generated`,
+      `graphify-out`, `.env*` (except `.env.example`), `.git`, `docs` and `knowledge`.
+      `shared/` resolves to `src/` (`main: ./src/index.ts`), so excluding `shared/dist` is safe.
+143.  **The healthcheck accepted any 2xx.** `r.ok` is true for 200-299, but the AC says "only once
+      /health returns 200". It now checks `r.status===200`.
+144.  **Added `start_period: 30s` to the backend healthcheck.** CMD runs `migrate deploy` and the
+      seed before the server listens. Without a start period, a slow first boot (Docker Desktop on
+      Windows or Mac) could use up 10 × 5s of retries, get marked unhealthy, and the frontend
+      would then never start.
+145.  **Non-issue: nginx IPv6.** `nginx:1.27-alpine`'s `default.conf` has only `listen 80;`, with no
+      `[::]:80` line, so the Dockerfile's `sed` to 5173 covers every listen directive.
+146.  **New test: `backend/test/composeWiring.test.ts`** (10, static, parses the compose file with
+      `yaml` 2.9.1, a new exact-pinned backend devDependency). It covers the `depends_on`
+      conditions, the healthcheck URL/status/start period, the build contexts, CORS_ORIGIN and the
+      VITE_* ports against the published ports, and the `.dockerignore` coverage. **Mutation-checked,
+      10 mutants, 10 killed.** The first pass let `/health` → `/healthz` survive because
+      `toContain` matched a prefix. It is fixed by asserting the quoted `fetch('…/health')`.
+147.  **graphify has no nodes for `Dockerfile`, `docker-compose.yml` or `.dockerignore`**
+      (`graphify path backend/Dockerfile health.ts` found no path). The blast radius was traced by
+      hand, the same as the seed in #51.
+
+## Found by `/validate` on TASK-019 (2026-09-24)
+
+148.  **`/validate`: booted the real stack from a clean checkout.** I `git clone`d the repo into the
+      scratchpad (no `node_modules`, no `.env`), applied the uncommitted diff, and ran
+      `docker compose -p task019`. Host ports were remapped to 55432/14000/15173 because the dev
+      Postgres (5432) and a local backend (4000) were running; the dev stack was not touched.
+      Sampling `docker compose ps` every second:
+      postgres `starting` → `healthy` at 6s, then the backend started (`starting`); the backend
+      was `healthy` at 16s, and only then did the frontend leave `Created`. Boot 1 applied
+      both migrations, seeded 500 trades, then logged "Backend listening". `/health` gave 200,
+      `/api/trades` returned data, nginx served `index.html` on 5173, the bundle had the
+      build-arg URLs baked in, and CORS echoed the frontend origin. A backend restart logged "No
+      pending migrations", skipped the seed (`existingCount: 500`) and was healthy again.
+      Afterwards: `down -v --rmi local` on `task019` only, and the scratch clone was deleted.
+149.  **Negative healthcheck probes:** the exact healthcheck command exits 1 for a 404 path and
+      for a port with nothing listening, so a not-yet-listening backend (during migrate/seed)
+      never reports healthy.
+150.  **The `.dockerignore` holds on a dirty tree.** `docker build -f backend/Dockerfile .` from the
+      real working tree (host `node_modules`, `generated`, `frontend/dist`, `.env` all present)
+      produced an image whose `backend/node_modules` was created by the container install (root,
+      at build time), with no `darwin` packages and no `.env`.
+151.  **BACKLOG: Windows is unverified.** Only macOS (arm64 Docker Desktop) was booted. The known
+      Windows failure (host junctions copied into the image) is now excluded by `.dockerignore`, and
+      the repo has no shell scripts that CRLF checkouts could break. A real Windows run is still
+      owed for the "any OS" AC.
+152.  **BACKLOG: default host ports clash with a running local stack.** 5432/4000/5173 are
+      hardcoded in `docker-compose.yml`, so `docker compose up` fails if the dev Postgres or
+      `pnpm dev` is up. Fix: `${POSTGRES_PORT:-5432}`-style variables, plus deriving CORS_ORIGIN and
+      the VITE_* args from them. `composeWiring.test.ts` already asserts the ports agree, so it would
+      catch a partial change.
