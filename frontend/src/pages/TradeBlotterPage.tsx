@@ -65,8 +65,10 @@ export function TradeBlotterPage() {
             try {
               await createTrade.mutateAsync(input);
               showToast('success', 'Trade created');
-            } catch {
+            } catch (error) {
               showToast('error', 'Failed to create trade');
+              // Rethrow so the modal stays open with the user's input.
+              throw error;
             }
           }}
         />
@@ -80,8 +82,10 @@ export function TradeBlotterPage() {
             try {
               await amendTrade.mutateAsync({ id: amendTarget.id, input });
               showToast('success', 'Trade amended');
-            } catch {
+            } catch (error) {
               showToast('error', 'Failed to amend trade');
+              // Rethrow so the modal stays open with the user's input.
+              throw error;
             }
           }}
         />

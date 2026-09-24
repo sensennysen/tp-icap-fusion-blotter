@@ -2,7 +2,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { createTradeSchema, type CreateTradeInput } from '@fusion-blotter/shared';
 import { Modal } from './Modal.js';
-import { TradeFormFields } from './TradeFormFields.js';
+import { TradeFormFields, setServerFieldErrors } from './TradeFormFields.js';
 
 interface CreateTradeModalProps {
   onClose: () => void;
@@ -13,20 +13,29 @@ export function CreateTradeModal({ onClose, onSubmit }: CreateTradeModalProps) {
   const {
     register,
     handleSubmit,
+    setError,
     formState: { errors, isSubmitting },
   } = useForm<CreateTradeInput>({
     resolver: zodResolver(createTradeSchema),
     defaultValues: { side: 'BUY' },
   });
 
+  // onSubmit rejects when the mutation fails (the caller has already toasted
+  // it): stay open so the user's input survives, and surface any server
+  // field errors next to their inputs. Close only after a successful submit.
   const submit = handleSubmit(async (values) => {
-    await onSubmit(values);
+    try {
+      await onSubmit(values);
+    } catch (error) {
+      setServerFieldErrors(error, setError);
+      return;
+    }
     onClose();
   });
 
   return (
     <Modal title="New Trade" onClose={onClose}>
-      <form onSubmit={submit} className="flex flex-col gap-4">
+      <form onSubmit={submit} noValidate className="flex flex-col gap-4">
         <TradeFormFields register={register} errors={errors} />
         <div className="flex justify-end gap-2">
           <button

@@ -1,6 +1,13 @@
 import type { ReactNode } from 'react';
-import type { FieldErrors, FieldValues, Path, UseFormRegister } from 'react-hook-form';
+import type {
+  FieldErrors,
+  FieldValues,
+  Path,
+  UseFormRegister,
+  UseFormSetError,
+} from 'react-hook-form';
 import type { CreateTradeInput } from '@fusion-blotter/shared';
+import { ApiError } from '../lib/apiClient.js';
 
 interface TradeFormFieldsProps<T extends FieldValues> {
   register: UseFormRegister<T>;
@@ -59,6 +66,33 @@ export function TradeFormFields<T extends Partial<CreateTradeInput>>({
       </Field>
     </div>
   );
+}
+
+const tradeFields = [
+  'symbol',
+  'side',
+  'quantity',
+  'price',
+  'trader',
+  'book',
+  'counterparty',
+] as const satisfies readonly (keyof CreateTradeInput)[];
+
+/**
+ * Shows a server VALIDATION_ERROR's per-field messages under the matching
+ * inputs. Keys the form doesn't render (e.g. `_`) are ignored — the caller's
+ * toast already reports the failure as a whole.
+ */
+export function setServerFieldErrors<T extends Partial<CreateTradeInput>>(
+  error: unknown,
+  setError: UseFormSetError<T>,
+) {
+  if (!(error instanceof ApiError) || !error.fields) return;
+  const setFieldError = setError as unknown as UseFormSetError<CreateTradeInput>;
+  for (const field of tradeFields) {
+    const message = error.fields[field];
+    if (message) setFieldError(field, { type: 'server', message });
+  }
 }
 
 const inputClass = 'w-full rounded border border-slate-300 px-2 py-1 text-sm';

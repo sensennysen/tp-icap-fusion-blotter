@@ -2,7 +2,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { amendTradeSchema, type AmendTradeInput, type Trade } from '@fusion-blotter/shared';
 import { Modal } from './Modal.js';
-import { TradeFormFields } from './TradeFormFields.js';
+import { TradeFormFields, setServerFieldErrors } from './TradeFormFields.js';
 
 interface AmendTradeModalProps {
   trade: Trade;
@@ -14,6 +14,7 @@ export function AmendTradeModal({ trade, onClose, onSubmit }: AmendTradeModalPro
   const {
     register,
     handleSubmit,
+    setError,
     formState: { errors, isSubmitting },
   } = useForm<AmendTradeInput>({
     resolver: zodResolver(amendTradeSchema),
@@ -28,14 +29,22 @@ export function AmendTradeModal({ trade, onClose, onSubmit }: AmendTradeModalPro
     },
   });
 
+  // onSubmit rejects when the mutation fails (the caller has already toasted
+  // it): stay open so the user's input survives, and surface any server
+  // field errors next to their inputs. Close only after a successful submit.
   const submit = handleSubmit(async (values) => {
-    await onSubmit(values);
+    try {
+      await onSubmit(values);
+    } catch (error) {
+      setServerFieldErrors(error, setError);
+      return;
+    }
     onClose();
   });
 
   return (
     <Modal title={`Amend ${trade.tradeId}`} onClose={onClose}>
-      <form onSubmit={submit} className="flex flex-col gap-4">
+      <form onSubmit={submit} noValidate className="flex flex-col gap-4">
         <TradeFormFields register={register} errors={errors} />
         <div className="flex justify-end gap-2">
           <button
