@@ -399,4 +399,30 @@ describe('TradeGrid', () => {
       expect(within(rowOf(tradeB.tradeId)).queryAllByRole('button')).toEqual([]);
     });
   });
+
+  describe('readOnly', () => {
+    it('omits the Actions column and every row button, keeping the other columns', () => {
+      renderGrid(trades, { readOnly: true });
+
+      expect(screen.getAllByRole('columnheader').map((th) => th.textContent)).toEqual(
+        columnNames
+          .filter((name) => name !== 'Actions')
+          .map((name) => expect.stringContaining(name)),
+      );
+      for (const row of bodyRows()) expect(within(row).queryAllByRole('button')).toEqual([]);
+    });
+
+    it('still sorts', () => {
+      renderGrid(trades, { readOnly: true });
+      clickHeader('Symbol');
+      expectSortedBy('Symbol', 'ascending');
+    });
+
+    it('brings the actions back when readOnly is lifted', () => {
+      const { rerenderWith } = renderGrid(trades, { readOnly: true });
+      rerenderWith({ readOnly: false });
+      expect(header('Actions')).toBeInTheDocument();
+      expect(within(rowOf(tradeB.tradeId)).getAllByRole('button')).toHaveLength(2);
+    });
+  });
 });

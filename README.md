@@ -64,7 +64,9 @@ knowledge/  Coding standards, design tokens, dev prompt templates
 
 ## Notes on scope
 
-- **Auth**: not implemented. It's a bonus item in the brief and out of scope for this pass
-  (`ARCH.md` §13).
+- **Auth**: mock only (bonus). Sign in with any username and pick a role. A **trader** can create,
+  amend and cancel. A **viewer** is read-only. The session is an unsigned cookie with no password,
+  so it's a stand-in for real auth, not a security boundary (`ARCH.md` §7). Audit rows record the
+  signed-in username as `changedBy`.
 - **No Figma export**: the UI was built from `ARCH.md` §11's functional layout notes and a small
   Tailwind token set documented in `knowledge/rules/design-system.md`, not a design handoff.

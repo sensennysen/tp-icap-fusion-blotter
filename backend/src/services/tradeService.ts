@@ -8,10 +8,6 @@ import { tradeAuditRepository } from '../repositories/tradeAuditRepository.js';
 import { WebSocketBroadcaster } from '../realtime/webSocketBroadcaster.js';
 import { ConflictError, NotFoundError } from '../lib/errors.js';
 
-// PLACEHOLDER: there is no auth yet, so every audit row is attributed to this
-// fixed value. TASK-002 (mock-auth) must replace it with the requesting user.
-export const AUDIT_CHANGED_BY = 'system';
-
 export class TradeService {
   constructor(private readonly broadcaster: WebSocketBroadcaster) {}
 
@@ -36,8 +32,9 @@ export class TradeService {
 
   // The repository writes only to ACTIVE trades, so a null result means the
   // trade is missing (404) or already cancelled (409).
-  async amend(id: string, input: AmendTradeInput) {
-    const trade = await tradeRepository.update(id, input, AUDIT_CHANGED_BY);
+  // changedBy is the logged-in username, recorded on the audit row.
+  async amend(id: string, input: AmendTradeInput, changedBy: string) {
+    const trade = await tradeRepository.update(id, input, changedBy);
     if (!trade) {
       await this.getById(id);
       throw new ConflictError(`Trade ${id} is cancelled and cannot be amended`);
@@ -46,8 +43,8 @@ export class TradeService {
     return trade;
   }
 
-  async cancel(id: string) {
-    const trade = await tradeRepository.cancel(id, AUDIT_CHANGED_BY);
+  async cancel(id: string, changedBy: string) {
+    const trade = await tradeRepository.cancel(id, changedBy);
     if (!trade) {
       await this.getById(id);
       throw new ConflictError(`Trade ${id} is already cancelled`);

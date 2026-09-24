@@ -7,6 +7,7 @@ import { WebSocketBroadcaster } from '../../src/realtime/webSocketBroadcaster.js
 import { tradeRepository } from '../../src/repositories/tradeRepository.js';
 import { TradeService } from '../../src/services/tradeService.js';
 import { connect, listen, shutdown, waitFor, type TestClient } from './helpers.js';
+import { sessionCookie } from '../helpers/auth.js';
 
 // Re-creates the wiring in server.ts (server.ts itself listens on import, so it
 // cannot be loaded in a test): one http.Server carries Express AND the
@@ -60,7 +61,7 @@ let client: TestClient;
 const send = (method: string, path: string, body?: unknown) =>
   fetch(`${baseUrl}${path}`, {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', cookie: sessionCookie() },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 

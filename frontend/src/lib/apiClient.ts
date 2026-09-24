@@ -1,6 +1,8 @@
 import type {
   AmendTradeInput,
+  AuthUser,
   CreateTradeInput,
+  LoginInput,
   Trade,
   TradeListQuery,
 } from '@fusion-blotter/shared';
@@ -53,6 +55,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(`${BASE_URL}${path}`, {
       ...init,
+      // The API is a different origin; the mock-auth session cookie only
+      // travels (and is only stored from Set-Cookie) with credentials included.
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...init?.headers },
     });
   } catch (cause) {
@@ -69,6 +74,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(res.status, 'HTTP_ERROR', res.statusText || 'Request failed');
   }
 
+  // A 204 (e.g. logout) has no body to unwrap.
+  if (res.status === 204) return undefined as T;
   return (body as { data: T }).data;
 }
 
@@ -97,4 +104,12 @@ export const apiClient = {
 
   cancelTrade: (id: string) =>
     request<Trade>(`/trades/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+
+  login: (input: LoginInput) =>
+    request<AuthUser>('/auth/login', { method: 'POST', body: JSON.stringify(input) }),
+
+  logout: () => request<undefined>('/auth/logout', { method: 'POST' }),
+
+  // Rejects with a 401 ApiError when there is no session.
+  me: () => request<AuthUser>('/auth/me'),
 };

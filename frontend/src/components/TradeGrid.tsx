@@ -16,6 +16,8 @@ interface TradeGridProps {
   isLoading: boolean;
   onAmend: (trade: Trade) => void;
   onCancel: (trade: Trade) => void;
+  // Drops the Actions column entirely (e.g. for a viewer session).
+  readOnly?: boolean;
 }
 
 const features = tableFeatures({
@@ -36,7 +38,13 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
 
 const EMPTY_TRADES: Trade[] = [];
 
-export function TradeGrid({ trades, isLoading, onAmend, onCancel }: TradeGridProps) {
+export function TradeGrid({
+  trades,
+  isLoading,
+  onAmend,
+  onCancel,
+  readOnly = false,
+}: TradeGridProps) {
   const [sorting, setSorting] = useState<SortingState>([{ id: 'tradeTimestamp', desc: true }]);
 
   const columns = useMemo(
@@ -74,34 +82,38 @@ export function TradeGrid({ trades, isLoading, onAmend, onCancel }: TradeGridPro
           cell: (info) => new Date(info.getValue()).toLocaleString(),
         }),
         columnHelper.accessor('status', { header: 'Status' }),
-        columnHelper.display({
-          id: 'actions',
-          header: 'Actions',
-          cell: ({ row }) => {
-            const trade = row.original;
-            if (trade.status === 'CANCELLED') return null;
-            return (
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className="text-sm font-medium text-blue-600 hover:underline"
-                  onClick={() => onAmend(trade)}
-                >
-                  Amend
-                </button>
-                <button
-                  type="button"
-                  className="text-sm font-medium text-sell hover:underline"
-                  onClick={() => onCancel(trade)}
-                >
-                  Cancel
-                </button>
-              </div>
-            );
-          },
-        }),
+        ...(!readOnly
+          ? [
+              columnHelper.display({
+                id: 'actions',
+                header: 'Actions',
+                cell: ({ row }) => {
+                  const trade = row.original;
+                  if (trade.status === 'CANCELLED') return null;
+                  return (
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className="text-sm font-medium text-blue-600 hover:underline"
+                        onClick={() => onAmend(trade)}
+                      >
+                        Amend
+                      </button>
+                      <button
+                        type="button"
+                        className="text-sm font-medium text-sell hover:underline"
+                        onClick={() => onCancel(trade)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  );
+                },
+              }),
+            ]
+          : []),
       ]),
-    [onAmend, onCancel],
+    [onAmend, onCancel, readOnly],
   );
 
   const table = useTable({

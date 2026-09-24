@@ -117,6 +117,23 @@ describe('request shape', () => {
     expect(init.body).toBeUndefined();
   });
 
+  it('includes credentials on every call so the session cookie travels cross-origin', async () => {
+    const calls: [(typeof apiClient)[keyof typeof apiClient], unknown[]][] = [
+      [apiClient.listTrades, []],
+      [apiClient.getTrade, ['trade-1']],
+      [apiClient.createTrade, [createInput]],
+      [apiClient.amendTrade, ['trade-1', { price: 190 }]],
+      [apiClient.cancelTrade, ['trade-1']],
+      [apiClient.login, [{ username: 'asmith', role: 'trader' }]],
+      [apiClient.me, []],
+    ];
+    for (const [call, args] of calls) {
+      respond(200, { data: trade });
+      await (call as (...a: unknown[]) => Promise<unknown>)(...args);
+      expect(lastCall()[1].credentials).toBe('include');
+    }
+  });
+
   it('sends Content-Type: application/json on every call', async () => {
     respond(200, { data: [] });
     await apiClient.listTrades();
@@ -277,5 +294,43 @@ describe('types', () => {
     expectTypeOf(apiClient.amendTrade).parameter(1).toEqualTypeOf<AmendTradeInput>();
     expectTypeOf(apiClient.amendTrade).returns.resolves.toEqualTypeOf<Trade>();
     expectTypeOf(apiClient.cancelTrade).returns.resolves.toEqualTypeOf<Trade>();
+  });
+});
+
+describe('auth calls', () => {
+  it('login POSTs the input to /auth/login and returns the user', async () => {
+    const user = { username: 'asmith', role: 'trader' } as const;
+    respond(200, { data: user });
+
+    await expect(apiClient.login(user)).resolves.toEqual(user);
+    const [url, init] = lastCall();
+    expect(url).toBe(`${BASE}/auth/login`);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual(user);
+  });
+
+  it('me GETs /auth/me', async () => {
+    respond(200, { data: { username: 'asmith', role: 'viewer' } });
+
+    await expect(apiClient.me()).resolves.toEqual({ username: 'asmith', role: 'viewer' });
+    expect(lastCall()[0]).toBe(`${BASE}/auth/me`);
+    expect(lastCall()[1].method).toBeUndefined();
+  });
+
+  it('me rejects with a 401 ApiError when there is no session', async () => {
+    respond(401, { error: { code: 'UNAUTHORIZED', message: 'Not logged in' } });
+
+    const err = await caught(apiClient.me());
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
+  });
+
+  it('logout POSTs /auth/logout and resolves on the empty 204', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await expect(apiClient.logout()).resolves.toBeUndefined();
+    expect(lastCall()[0]).toBe(`${BASE}/auth/logout`);
+    expect(lastCall()[1].method).toBe('POST');
   });
 });

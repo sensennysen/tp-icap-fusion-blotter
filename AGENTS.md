@@ -8,7 +8,8 @@
 trades, with changes pushed live to every connected client. Single-sitting take-home deliverable
 (see `docs/arch-docs/trade-blotter/ARCH.md` §13) — not a phased production rollout, so this pass
 wires **real** Prisma-backed persistence and real WebSocket broadcasting directly; it does not use
-`/scaffold`'s usual mock-data-only Day-0 restriction. Auth is out of scope (bonus-only).
+`/scaffold`'s usual mock-data-only Day-0 restriction. Auth is a **mock** cookie/role session (bonus
+TASK-002, `ARCH.md` §7), not real authentication.
 
 **Stack:** TypeScript everywhere · pnpm workspaces (`frontend/`, `backend/`, `shared/`) · Express ·
 PostgreSQL 16 + Prisma · raw `ws` WebSocket server on the same HTTP port · Vite + React ·
@@ -26,8 +27,9 @@ See `knowledge/rules/coding-standards.md` for the full ruleset.
   already-validated data.
 - All Prisma queries are parameterized via the Prisma client — no raw SQL, no injection surface.
 - Every thrown error maps to the JSON envelope `{ "error": { "code", "message", "fields"? } }`
-  (`backend/src/middleware/errorHandler.ts`). Status codes: 400 validation, 404 not found,
-  409 conflict, 500 unexpected (logged server-side, generic message to the client).
+  (`backend/src/middleware/errorHandler.ts`). Status codes: 400 validation, 401 no session,
+  403 wrong role, 404 not found, 409 conflict, 500 unexpected (logged server-side, generic message
+  to the client).
 - No `console.log` — use `pino` (`backend/src/lib/logger.ts`).
 - CORS is restricted to `CORS_ORIGIN` from the environment — never wildcarded.
 - All secrets/config via environment variables (`.env`, documented in `.env.example`) — never
@@ -38,8 +40,10 @@ See `knowledge/rules/coding-standards.md` for the full ruleset.
   validation logic between `frontend/` and `backend/`.
 - `useRealtimeTrades` must reconcile WebSocket events directly into the exact TanStack Query cache
   key the blotter is reading (`ADR-004` consequence) — never force a network refetch per event.
-- No authentication in this pass. Do not add a login page, session cookie, or route guard unless
-  explicitly asked to pick up the bonus.
+- Auth is mock-only (`ARCH.md` §7): an unsigned `fusion_session` cookie holding `{ username, role }`.
+  Do not grow it into real auth (passwords, JWTs, identity providers) without an explicit ask.
+  Every trade mutation route sits behind `requireRole('trader')`, and the audit `changedBy` is the
+  session username passed down from the route. Never reintroduce a fixed placeholder user.
 
 ## Git Conventions
 
