@@ -87,19 +87,30 @@ Non-goals (explicitly out of scope per the brief): complex regulatory trade work
 
 Indexes: `symbol`, `trader`, `status`, `tradeTimestamp` — covers the brief's sort/filter requirements.
 
-Bonus-only: `trade_audit` table (`tradeId` FK, `changedFields` JSON, `changedAt`, `changedBy`) — only if the Audit Trail bonus is attempted; not part of core scope.
+`trade_audit` table (Prisma model `TradeAudit`, bonus Audit Trail — implemented):
+
+| Column          | Type                          | Notes                                                                        |
+| --------------- | ----------------------------- | ---------------------------------------------------------------------------- |
+| `id`            | `String @id @default(cuid())` | internal PK                                                                  |
+| `tradeId`       | `String`                      | FK → `trades.id` (the cuid PK, **not** the `TRD-n` code); cascades on delete |
+| `changedFields` | `Json`                        | `{ <field>: { from, to } }` for each field whose value changed               |
+| `changedAt`     | `DateTime @default(now())`    |                                                                              |
+| `changedBy`     | `String`                      | **placeholder `"system"`** until auth (bonus TASK-002) supplies a user       |
+
+Index: `(tradeId, changedAt)`. Every successful amend/cancel writes exactly one row in the same transaction as the trade change (row-locked with `SELECT … FOR UPDATE` so the `from` values are exact); a rejected write (404/409) writes none. An amend that changes no values still writes one row with `changedFields = {}`. Creates are not audited. The cascade exists only so prefix-scoped test cleanups keep working — the app never deletes trades.
 
 ## 5. API Design & Contracts
 
 REST, JSON, base path `/api`:
 
-| Method | Path                                                 | Purpose                                 |
-| ------ | ---------------------------------------------------- | --------------------------------------- |
-| GET    | `/trades?symbol=&trader=&side=&status=&sort=&order=` | list with filter/sort                   |
-| GET    | `/trades/:id`                                        | single trade                            |
-| POST   | `/trades`                                            | create (validated by shared Zod schema) |
-| PATCH  | `/trades/:id`                                        | amend (rejects if `status=CANCELLED`)   |
-| POST   | `/trades/:id/cancel`                                 | status transition to `CANCELLED`        |
+| Method | Path                                                 | Purpose                                       |
+| ------ | ---------------------------------------------------- | --------------------------------------------- |
+| GET    | `/trades?symbol=&trader=&side=&status=&sort=&order=` | list with filter/sort                         |
+| GET    | `/trades/:id`                                        | single trade                                  |
+| POST   | `/trades`                                            | create (validated by shared Zod schema)       |
+| PATCH  | `/trades/:id`                                        | amend (rejects if `status=CANCELLED`)         |
+| POST   | `/trades/:id/cancel`                                 | status transition to `CANCELLED`              |
+| GET    | `/trades/:id/audit`                                  | audit history, oldest first (404 if no trade) |
 
 Request/response bodies typed from `shared/trade.ts`; validation errors return field-level detail (§8).
 
