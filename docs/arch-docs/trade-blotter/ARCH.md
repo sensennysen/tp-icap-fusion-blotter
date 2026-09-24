@@ -16,7 +16,7 @@ Non-goals (explicitly out of scope per the brief): complex regulatory trade work
 | Layer            | Choice                                                                  | Why (detail in ADRs)                                                                                                 |
 | ---------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | Language         | TypeScript everywhere (frontend, backend, shared)                       | Required by brief; enables one shared domain-type/validation layer                                                   |
-| Monorepo         | npm workspaces: `frontend/`, `backend/`, `shared/`                      | Zero extra tooling (no Nx/Turborepo) for a project this size — see [ADR-001](./ADR-001-stack-and-monorepo.md)        |
+| Monorepo         | pnpm workspaces: `frontend/`, `backend/`, `shared/`                     | Zero extra tooling (no Nx/Turborepo) for a project this size — see [ADR-001](./ADR-001-stack-and-monorepo.md)        |
 | Backend          | Node.js + Express                                                       | Simplest of the brief's acceptable options, least boilerplate — see [ADR-001](./ADR-001-stack-and-monorepo.md)       |
 | Database         | PostgreSQL 16 via Docker Compose                                        | Matches "Docker preferred" deliverable; avoids dev/prod drift — see [ADR-002](./ADR-002-database-and-persistence.md) |
 | ORM              | Prisma                                                                  | Typed client, migrations + seed CLI built in — see [ADR-002](./ADR-002-database-and-persistence.md)                  |
@@ -164,7 +164,7 @@ Full list documented in `.env.example` during APPLY.
 └── docs/arch-docs/trade-blotter/   # this ARCH doc + ADRs
 ```
 
-Local run: `docker compose up` (preferred) or `npm install && npm run dev` at root (workspaces) against a local/dockerized Postgres. Must work unmodified on Windows/Linux/Mac.
+Local run: `docker compose up` (preferred) or `pnpm install && pnpm dev` at root (workspaces) against a local/dockerized Postgres. Must work unmodified on Windows/Linux/Mac.
 
 ## 11. UI Notes (Figma substitute)
 

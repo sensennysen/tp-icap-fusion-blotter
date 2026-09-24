@@ -17,7 +17,7 @@ The brief requires a TypeScript React frontend and a TypeScript backend, deliver
 ## Decision
 
 - Backend framework: **Express**, the first of the brief's "acceptable examples" and the one with the least ceremony for a ~5-endpoint CRUD API.
-- Monorepo tooling: **npm workspaces** only (`frontend`, `backend`, `shared`), no Nx/Turborepo/Lerna.
+- Monorepo tooling: **pnpm workspaces** only (`frontend`, `backend`, `shared`), no Nx/Turborepo/Lerna.
 - Add a `shared/` workspace for the `Trade` type and Zod validation schemas, imported by both `frontend/` and `backend/`.
 
 ## Alternatives Considered
