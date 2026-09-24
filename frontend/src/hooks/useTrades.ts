@@ -7,13 +7,15 @@ import type {
 } from '@fusion-blotter/shared';
 import { apiClient } from '../lib/apiClient.js';
 import { tradesQueryKey } from '../lib/queryClient.js';
+import { normalizeTradeListQuery } from '../lib/tradeListQuery.js';
 
 export function useTrades(filters: TradeListQuery) {
   const queryClient = useQueryClient();
+  const query = normalizeTradeListQuery(filters);
 
   const tradesQuery = useQuery({
-    queryKey: [...tradesQueryKey, filters],
-    queryFn: () => apiClient.listTrades(filters),
+    queryKey: [...tradesQueryKey, query],
+    queryFn: () => apiClient.listTrades(query),
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: tradesQueryKey });

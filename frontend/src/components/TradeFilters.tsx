@@ -1,5 +1,5 @@
 import type { ChangeEvent } from 'react';
-import type { TradeListQuery } from '@fusion-blotter/shared';
+import { sideSchema, tradeStatusSchema, type TradeListQuery } from '@fusion-blotter/shared';
 
 interface TradeFiltersProps {
   filters: TradeListQuery;
@@ -11,10 +11,21 @@ function toUndefined(value: string): string | undefined {
 }
 
 export function TradeFilters({ filters, onChange }: TradeFiltersProps) {
-  const handleChange =
-    (field: keyof TradeListQuery) => (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  // Raw text is kept as typed (trimming here would swallow the space in "j doe" mid-typing);
+  // useTrades normalises it before it becomes a query key or request.
+  const handleTextChange =
+    (field: 'symbol' | 'trader') => (event: ChangeEvent<HTMLInputElement>) => {
       onChange({ ...filters, [field]: toUndefined(event.target.value) });
     };
+
+  // "All" ('') parses to undefined, so a cleared select omits the param.
+  const handleSideChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    onChange({ ...filters, side: sideSchema.safeParse(event.target.value).data });
+  };
+
+  const handleStatusChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    onChange({ ...filters, status: tradeStatusSchema.safeParse(event.target.value).data });
+  };
 
   return (
     <fieldset className="flex flex-wrap items-end gap-3">
@@ -28,7 +39,7 @@ export function TradeFilters({ filters, onChange }: TradeFiltersProps) {
           id="filter-symbol"
           type="text"
           value={filters.symbol ?? ''}
-          onChange={handleChange('symbol')}
+          onChange={handleTextChange('symbol')}
           placeholder="AAPL"
           className="rounded border border-slate-300 px-2 py-1 text-sm"
         />
@@ -42,7 +53,7 @@ export function TradeFilters({ filters, onChange }: TradeFiltersProps) {
           id="filter-trader"
           type="text"
           value={filters.trader ?? ''}
-          onChange={handleChange('trader')}
+          onChange={handleTextChange('trader')}
           placeholder="jdoe"
           className="rounded border border-slate-300 px-2 py-1 text-sm"
         />
@@ -55,7 +66,7 @@ export function TradeFilters({ filters, onChange }: TradeFiltersProps) {
         <select
           id="filter-side"
           value={filters.side ?? ''}
-          onChange={handleChange('side')}
+          onChange={handleSideChange}
           className="rounded border border-slate-300 px-2 py-1 text-sm"
         >
           <option value="">All</option>
@@ -71,7 +82,7 @@ export function TradeFilters({ filters, onChange }: TradeFiltersProps) {
         <select
           id="filter-status"
           value={filters.status ?? ''}
-          onChange={handleChange('status')}
+          onChange={handleStatusChange}
           className="rounded border border-slate-300 px-2 py-1 text-sm"
         >
           <option value="">All</option>
