@@ -908,3 +908,60 @@ src/server.ts"` does not match the tsx process (its argv is `… loader.mjs src/
       `pnpm dev` is up. Fix: `${POSTGRES_PORT:-5432}`-style variables, plus deriving CORS_ORIGIN and
       the VITE_* args from them. `composeWiring.test.ts` already asserts the ports agree, so it would
       catch a partial change.
+
+## Found by `/evaluate` + `/plan` + `/apply` on TASK-020 (2026-09-24)
+
+153.  **CI never generated the Prisma client.** `backend/generated/` is gitignored, there is no
+      `postinstall` hook, and `ci.yml` went straight from `pnpm install` to lint. The backend
+      Dockerfile has always run `prisma generate` (line 17), but CI never did. On a clean runner
+      the backend typecheck, tests and build would fail on the missing import. Fixed with a
+      "Generate Prisma client" step right after install.
+154.  **The repo has no git remote, so the workflow has never run on GitHub.** The TASK-020 CSV
+      row said "already running on every push". That was unverified, and the row is now
+      corrected. **BACKLOG:** the first real GitHub Actions run is still owed once a remote exists.
+155.  **Retro #17 closed.** `backend/tsconfig.json` now includes `test` and `vitest.config.ts`,
+      so `pnpm typecheck` (and `build`, which uses the same tsconfig) covers the backend tests.
+      Widening it surfaced 2 hidden errors in `tradeRepository.test.ts`: `SeedOverrides` took
+      `side` from `baseRecord`, whose literal `'BUY'` rejected `'SELL'`. Fixed at the type level
+      only. The Docker build is unaffected (`.dockerignore` keeps `test/`, and devDependencies
+      are installed).
+156.  **Retro #4 closed.** ADR-001 now says pnpm workspaces and has a dated Amendment. The same
+      stale line was also fixed in `ARCH.md` (the stack table, plus `npm install && npm run dev`
+      → `pnpm install && pnpm dev`) and in `knowledge/rules/arch-summary.md`.
+157.  **New test: `backend/test/ciWiring.test.ts`** (7 tests, static, parses `ci.yml` with
+      `yaml`). It covers the triggers, `HUSKY=0`, the step order (install → generate → lint →
+      typecheck → migrate → test → build), pnpm version = `packageManager`, Node ≥
+      `engines.node`, the service image = the compose postgres image, the `pg_isready` gate, and
+      `DATABASE_URL` user/password/database/port against the service's own env and port.
+      **Mutation-checked, 12 mutants, 12 killed.**
+158.  **BACKLOG: ADR-001's Consequences are also stale.** They say Prisma's client is generated
+      into `backend/node_modules` via `--schema=...`. In reality it goes to `backend/generated/`
+      via `prisma7.config.ts`. This was left alone because TASK-020 only owned the pnpm
+      correction.
+
+## Found by `/validate` on TASK-020 (2026-09-24)
+
+159.  **`/validate`: replayed the workflow from a clean clone.** I `git clone`d the repo into the
+      scratchpad (no `node_modules`, `generated/` or `.env`) and started a throwaway
+      `postgres:16-alpine` on port 55433 with the workflow's credentials. The step commands were
+      read from `ci.yml` itself, not retyped.
+      - **Negative control (HEAD, before the diff):** install, then `pnpm --filter backend
+typecheck`, exits 1 with `TS2307: Cannot find module '../../generated/prisma/client.ts'`.
+        The old workflow would have failed on its first real run.
+      - **With the diff:** all 7 steps exit 0. `migrate deploy` applied both migrations. The
+        tests were shared 48, backend 158 + 4 todo (DB-backed, against the service DB), and
+        frontend 234. The build passed.
+      - The dev DB was never touched. The container, the image and the clone were removed.
+160.  **Every gate fails on an injected regression:**
+      - A type error in a backend _test_ makes `pnpm typecheck` exit 1. It was invisible before
+        #155.
+      - A wrong expectation in a DB-backed suite makes `pnpm test` exit 1.
+      - A frontend type error makes `pnpm build` exit 1.
+      - An explicit `any` (error-level lint rule) makes `pnpm lint` exit 1.
+161.  **`docker build -f backend/Dockerfile .` still succeeds with the wider tsconfig.** The build
+      stage's `tsc` now also checks `backend/test/`, and it passes.
+162.  **BACKLOG: lint _warnings_ never fail CI.** `@typescript-eslint/no-unused-vars` is `warn`
+      in the root `eslint.config.js`, and no lint script passes `--max-warnings 0`. An unused
+      local variable passed `pnpm lint` with exit 0. The repo has 0 warnings today, so adding
+      `--max-warnings 0` to each workspace's `lint` script is cheap. It is a policy change
+      (someone chose `warn`), so it was left for an explicit decision.
